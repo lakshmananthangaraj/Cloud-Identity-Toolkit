@@ -1,0 +1,7 @@
+@"
+*.log
+*.tmp
+.vscode/
+*.pfx
+*.psd1.bak
+"@ | Out-File .gitignore -Encoding utf8
