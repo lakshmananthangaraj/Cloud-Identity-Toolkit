@@ -8,8 +8,8 @@ A curated, public toolkit of PowerShell scripts and runbooks for managing Entra 
 
 | Area | What it covers |
 |---|---|
-| [`Entra-ID/`](./entra-id) | User, group, admin role, MFA, application, and multi-tenant management scripts |
-| [`Azure/`](./azure) | RBAC analysis/consolidation and resource management automation |
+| [`Entra-ID/`](./Entra-ID) | User, group, admin role, MFA, application, and multi-tenant management scripts |
+| [`Azure/`](./Azure) | RBAC analysis/consolidation and resource management automation |
 
 ## Quick start
 
