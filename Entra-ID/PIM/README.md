@@ -1,6 +1,6 @@
 # PIM — Entra ID Privileged Identity Management Reporting
 
-This folder contains two PowerShell functions that give you a complete picture of privileged access in your Microsoft Entra ID (Azure AD) tenant — who has it, how they got it, and whether it's permanent or time-bound.
+This folder contains two PowerShell functions that give you a complete picture of privileged access in your Microsoft Entra ID (Azure AD) tenant - who has it, how they got it, and whether it's permanent or time-bound.
 
 If you've ever had to answer "who currently has Global Administrator?" or prepare for a security audit, these scripts turn that into a two-minute task instead of a morning of clicking through the Entra portal.
 
