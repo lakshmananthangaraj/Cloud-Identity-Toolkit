@@ -28,7 +28,7 @@ For a **security or compliance team**, this answers questions like:
 
 For **IT operations**, it's a fast, repeatable export — no manual portal digging, and it can be scheduled to run automatically (see [Authentication](#authentication) below).
 
-For **leadership / non-technical readers**, the optional HTML dashboard turns all of the above into charts, KPI tiles, and plain-language risk callouts — no PowerShell knowledge required to read the results.
+For **leadership / non-technical readers**, the optional HTML dashboard turns all of the above into charts, KPI tiles, and plain-language risk callouts - no PowerShell knowledge required to read the results.
 
 ---
 
