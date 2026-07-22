@@ -1,152 +1,143 @@
 <#
 
+Author          : Lakshmanan Thangaraj
+Version         : 1.8
+Created-On      : 1 October 2024
+Modified-On     : 22 July 2026
 
-Author       :   Lakshmanan Thangaraj
-Version      :   1.7
-Date Created :   1 October 2024 
-Date Modified:   27 February 2026
+.SYNOPSIS
+    Retrieves and analyzes Azure RBAC role assignments across one or more subscriptions,
+    with optional CSV export and an auto-generated HTML summary report.
 
-Script Name: 
-	Get-AzureRBACAssignments
+.DESCRIPTION
+    The Get-AzureRBACAssignments function retrieves Azure Role-Based Access Control (RBAC)
+    role assignments across one or multiple Azure subscriptions.
 
-Description:
-	Get-AzureRBACAssignments is a PowerShell function designed to retrieve and display Azure Role-Based Access Control (RBAC) assignments across multiple Azure subscriptions. 
-	The function supports retrieving all RBAC assignments or filtering results based on specific subscriptions, Azure resource types, and RBAC role names. 
-	Additionally, it offers the option to export the retrieved data to a CSV file for further analysis or record-keeping.
+    It supports:
+        - Scanning all subscriptions in the tenant, or a specified list of subscription IDs
+        - Filtering by Azure resource provider (-ResourceType), e.g. Microsoft.KeyVault,
+          Microsoft.Storage, Microsoft.Compute
+        - Filtering by RBAC role name (-RoleName), e.g. Reader, Contributor, Key Vault
+          Administrator
+        - Real-time progress tracking with a live progress bar and color-coded console
+          status per subscription
+        - Scope-level classification (Management Group / Subscription / Resource Group /
+          Resource) and Principal Type distribution (User / Group / Service Principal)
+        - Optional CSV export of all collected assignments
+        - Always-on HTML report generation (Azure-themed, self-contained) summarizing
+          session info, scan parameters, statistics, and distributions
+        - Interactive Grid View display of results (where a GUI is available)
 
-Version History:
-	v1.0 (2024-10-01):
-		- Initial release.
-		- Retrieved RBAC assignments across all or selected subscriptions.
+.PARAMETER AllSubscriptions
+    Switch. Scans every subscription visible to the authenticated account/context.
+    This is also the default behavior if -SubscriptionIds is not supplied.
 
-	v1.1 (2026-02-11):
-		- Added ResourceType parameter to filter RBAC assignments by Azure resource provider.
+.PARAMETER SubscriptionIds
+    String array of specific Azure subscription IDs to scan, instead of all subscriptions.
+    Ignored if -AllSubscriptions is also specified.
 
-	v1.2 (2026-02-11):
-		- Added RoleName parameter to filter RBAC assignments by specific RBAC roles.
-		- Enhanced usage flexibility for targeted RBAC audits and governance scenarios.
+.PARAMETER ExportToCsv
+    Switch. If specified, exports all collected RBAC assignments to the path given in
+    -CsvPath. An HTML report is generated regardless of whether this switch is used.
 
-	v1.3 (2026-02-27):
-		- Enhanced UI/UX with modern, clean design
-		- Added visual progress tracking with progress bars
-		- Implemented color-coded status messages
-		- Added execution summary with key metrics
-		- Improved error messages with context
-		- Added statistics tracking (role distribution, object types)
-		- Maintained all original functionality and logic
+.PARAMETER CsvPath
+    Path where the CSV export will be written if -ExportToCsv is specified. Also used
+    to derive the HTML report's file name/location (same path, .html extension).
+    Default: C:\Temp\AzureRBACAssignments-Report.csv
 
-    v1.4 (2026-02-27):
-        - Added ResourceType column in output.
-        - Implemented accurate scope parsing to detect:
-            - Management Group
-            - Subscription
-            - Resource Group
-            - Resource-level assignments
-        - No changes to existing logic or functionality.
+.PARAMETER ResourceType
+    Optional filter. Restricts results to RBAC assignments scoped to a specific Azure
+    resource provider, e.g. "Microsoft.KeyVault", "Microsoft.Storage", "Microsoft.Compute".
 
-    v1.5 (2026-02-27):
-        - Added ResourceType distribution statistics.
-        - Added Top 5 Resource Types summary section.
-        - Added Scope Level percentage distribution (Subscription / Resource Group / Resource).
-        - Enhanced governance analytics without modifying core logic.
-        - Maintained backward compatibility and existing functionality.
+.PARAMETER RoleName
+    Optional filter. Restricts results to a specific RBAC role definition name,
+    e.g. "Reader", "Contributor", "Key Vault Administrator".
 
-    v1.6 (2026-02-27):
-        - Enhanced Scope Level Distribution tracking.
-        - Added Management Group level assignment tracking.
-        - Implemented Principal Type distribution (User, Group, Service Principal).
-        - Improved reporting accuracy for RBAC assignment analysis.
-        - Refactored logic for better performance and maintainability.
+.OUTPUTS
+    None directly to the pipeline. Always writes an HTML report alongside -CsvPath
+    (or the default path). Optionally writes a CSV file if -ExportToCsv is specified.
+    Displays results in an interactive Grid View window where a GUI is available.
 
-	v1.7 (2026-02-27):
-        - Added HTML report generation with modern Azure-themed design
-        - Automatically generates comprehensive HTML report at end of execution
-        - HTML report includes all session info, parameters, statistics, and visualizations
-        - Report saved alongside CSV export for complete audit trail
-        - No changes to existing logic or functionality
+.EXAMPLE
+    Get-AzureRBACAssignments -AllSubscriptions
 
-Functionality:
-	Session Management:
-		- Checks for an active Azure session and prompts for authentication if none is found.
+.EXAMPLE
+    Get-AzureRBACAssignments -SubscriptionIds @("SubscriptionID1", "SubscriptionID2")
 
-	Subscription Handling:
-		- Processes all subscriptions in the tenant or a specified list of subscription IDs.
+.EXAMPLE
+    Get-AzureRBACAssignments -AllSubscriptions -ResourceType Microsoft.KeyVault
 
-	RBAC Assignment Retrieval:
-		- Retrieves RBAC role assignments at all scopes.
-		- Supports filtering by:
-			- Resource Type (e.g., Microsoft.KeyVault, Microsoft.Storage, Microsoft.Compute)
-			- Role Name (e.g., Reader, Contributor, Key Vault Administrator)
+.EXAMPLE
+    Get-AzureRBACAssignments -AllSubscriptions -RoleName Reader
 
-	Data Export:
-		- Optionally exports the collected RBAC assignments to a CSV file.
+.EXAMPLE
+    Get-AzureRBACAssignments -AllSubscriptions -ResourceType Microsoft.KeyVault -RoleName "Key Vault Administrator"
 
-	User Feedback:
-		- Provides real-time execution feedback, progress indicators, and error messages via console output.
+.EXAMPLE
+    Get-AzureRBACAssignments -AllSubscriptions -ExportToCsv -CsvPath "C:\Path\To\Output.csv"
 
-Requirements:
-	PowerShell Module:
-		- Requires the Az PowerShell module for interacting with Azure resources.
-		- Ensure the Az module is installed and imported in the PowerShell environment.
+.NOTES
+    Requirements:
+        - Az PowerShell module (installed/imported automatically if missing, with
+          user consent at the console prompt)
+        - A valid Azure account with Reader role (minimum) at the subscription level
 
-	Azure Account:
-		- A valid Azure account with permissions to view RBAC assignments.
+    Permissions:
+        - Microsoft.Authorization/roleAssignments/read at the subscription level
+        - Access to each specified subscription, if using -SubscriptionIds
 
-Permissions:
-	To run this script successfully, the following permissions are required:
-		- Reader role (minimum) at the subscription level to retrieve RBAC assignments.
-		- Access to the specified subscriptions (if using the -SubscriptionIds parameter).
+    Known limitations:
+        - Interactive Grid View requires a GUI-capable session (Windows PowerShell ISE,
+          or Microsoft.PowerShell.GraphicalTools on PS7). In headless/CI/Linux sessions
+          this step is skipped gracefully; CSV/HTML output is unaffected.
+        - Default -CsvPath (C:\Temp\...) is a Windows-specific path. On macOS/Linux
+          PowerShell 7, supply an explicit -CsvPath.
+        - If neither -AllSubscriptions nor -SubscriptionIds is supplied, the function
+          defaults to scanning ALL subscriptions visible to the current account with
+          no additional confirmation prompt.
 
-Usage:
-	# Get RBAC assignments for all subscriptions
-	Get-AzureRBACAssignments -AllSubscriptions
+    ─────────────────────────────────────────────────────────────────────────────
+    Version History:
+    ─────────────────────────────────────────────────────────────────────────────
+        1.0 (01-Oct-2024)      - Initial release. Retrieved RBAC assignments across
+                                 all or selected subscriptions.
+        1.1 (11-Feb-2026)      - Added -ResourceType parameter to filter RBAC
+                                 assignments by Azure resource provider.
+        1.2 (11-Feb-2026)      - Added -RoleName parameter to filter RBAC assignments
+                                 by specific RBAC roles. Enhanced usage flexibility
+                                 for targeted RBAC audits and governance scenarios.
+        1.3 (27-Feb-2026)      - Enhanced UI/UX with modern, clean console design.
+                                 Added visual progress tracking with progress bars,
+                                 color-coded status messages, and execution summary
+                                 with key metrics. Improved error messages with
+                                 context. Added statistics tracking (role distribution,
+                                 object types). No changes to core logic.
+        1.4 (27-Feb-2026)      - Added ResourceType column in output. Implemented
+                                 accurate scope parsing to detect Management Group /
+                                 Subscription / Resource Group / Resource-level
+                                 assignments. No changes to existing logic.
+        1.5 (27-Feb-2026)      - Added ResourceType distribution statistics, Top 5
+                                 Resource Types summary, and Scope Level percentage
+                                 distribution. No changes to core logic.
+        1.6 (27-Feb-2026)      - Enhanced Scope Level Distribution tracking. Added
+                                 Management Group level assignment tracking and
+                                 Principal Type distribution (User, Group, Service
+                                 Principal). Refactored for performance/maintainability.
+        1.7 (27-Feb-2026)      - Added HTML report generation with modern Azure-themed
+                                 design, auto-generated at end of execution alongside
+                                 CSV export for a complete audit trail. No changes to
+                                 existing logic.
+        1.8 (22-Jul-2026)      - Documentation-only update: reformatted header into
+                                 standard comment-based help (.SYNOPSIS/.PARAMETER/
+                                 .OUTPUTS/.EXAMPLE/.NOTES/.LINK), added explicit
+                                 Known Limitations section (Grid View GUI dependency,
+                                 Windows-specific default path, silent all-subscription
+                                 default). No functional/logic changes.
 
-	# Get RBAC assignments for specific subscriptions
-	Get-AzureRBACAssignments -SubscriptionIds @("SubscriptionID1", "SubscriptionID2")
-
-	# Get RBAC assignments for a specific Azure resource type
-	Get-AzureRBACAssignments -AllSubscriptions -ResourceType Microsoft.KeyVault
-
-	# Get RBAC assignments for a specific role across all subscriptions
-	Get-AzureRBACAssignments -AllSubscriptions -RoleName Reader
-
-	# Get RBAC assignments for a specific resource type and role
-	Get-AzureRBACAssignments `
-		-AllSubscriptions `
-		-ResourceType Microsoft.KeyVault `
-		-RoleName "Key Vault Administrator"
-
-	# Export RBAC assignments to a CSV file
-	Get-AzureRBACAssignments `
-		-AllSubscriptions `
-		-ExportToCsv `
-		-CsvPath "C:\Path\To\Output.csv"
-
-Output:
-	The script produces the following outputs:
-
-	Console Output:
-		- Real-time status messages, progress updates, and error notifications.
-
-	Grid View:
-		- Displays the collected RBAC role assignments in an interactive Out-GridView window.
-
-	CSV File (Optional):
-		- If export is enabled, a CSV file containing:
-			- SubscriptionName
-			- SubscriptionId
-			- TenantId
-			- DisplayName
-			- SignInName
-			- ObjectType
-			- RoleDefinitionName
-			- Scope
-
-Conclusion:
-	The Get-AzureRBACAssignments function is a flexible and scalable tool for Azure administrators and security teams to audit and analyze RBAC role assignments. 
-	With support for subscription, resource type, and role-based filtering, it enables precise RBAC reviews while avoiding unnecessary data collection. 
-	The combination of interactive viewing and CSV export makes it suitable for both operational troubleshooting and governance reporting.
-
+.LINK
+    Generate-RBACVisualizationReport.ps1 (companion script — consumes this script's
+    CSV export to produce an interactive HTML visualization report)
+    https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/Azure/RBAC/Generate-RBACVisualizationReport.ps1
 
 #>
 
