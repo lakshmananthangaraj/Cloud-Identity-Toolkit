@@ -21,6 +21,12 @@ Modified-On     : 03 May 2026
 
     Results can optionally be exported to CSV.
 
+    SCOPE & SUITABILITY:
+    This function is designed for smaller tenants or quick ad-hoc pulls where a single
+    Bearer token comfortably outlives the full pagination run. It does not implement
+    token refresh mid-run. For large/enterprise-scale tenants, see Known Limitations
+    below before relying on this function as-is.
+
     This function only accepts a direct Bearer token (AccessToken). It does not perform
     authentication itself. If you need to obtain a token via app-only (client credentials)
     authentication, use the companion Connect-EntraID.ps1 script referenced under .LINK
@@ -106,8 +112,18 @@ Modified-On     : 03 May 2026
         - Requires a valid bearer token with the specified permissions.
         - signInActivity may require Entra ID licensing (e.g., Azure AD Premium P1/P2)
             and will be null otherwise.
-        - Retrieves the full user set per call; very large tenants may take
-            significant time due to sequential pagination.
+        - SINGLE-TOKEN, SEQUENTIAL PAGINATION: this function uses one static Bearer
+            token for the entire pagination run and does not refresh it mid-run. In
+            very large tenants, if the full pull takes longer than the token's
+            lifetime (typically ~60-90 minutes), the run will fail partway through
+            with 401 Unauthorized once the token expires.
+        - RECOMMENDED FOR: smaller tenants, scoped/filtered pulls, or quick
+            one-off/ad-hoc workarounds.
+        - NOT RECOMMENDED AS-IS FOR: large/enterprise-scale tenants. For those,
+            implement a proper token-refresh pattern (re-acquire via app-only
+            client-credentials auth on a timer or before each page/batch) and
+            consider parallelized/batched Graph calls instead of this single-
+            threaded sequential loop.
 
 .LINK
     Microsoft Graph API - User resource type
