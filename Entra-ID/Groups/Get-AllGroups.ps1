@@ -1,9 +1,9 @@
 <#
 
 Author          : Lakshmanan Thangaraj
-Version         : 1.0
+Version         : 1.1
 Created-On      : 05 May 2024
-Modified-On     : 24 July 2026
+Modified-On     : 25 July 2026
 
 .SYNOPSIS
     Retrieves all groups from Microsoft Entra ID using Microsoft Graph API.
@@ -18,6 +18,9 @@ Modified-On     : 24 July 2026
     groupTypes and assignedLicenses — into report-friendly formats.
 
     Results can optionally be exported to CSV.
+
+    Results can optionally be filtered by GroupType to scope the query to a specific
+    category: All, M365, Security, Dynamic, Cloud, or OnPremises.
 
     This function only accepts a direct Bearer token (AccessToken). It does not perform
     authentication itself. If you need to obtain a token via app-only (client credentials)
@@ -46,6 +49,18 @@ Modified-On     : 24 July 2026
 
     To obtain this token via app-only authentication instead of an interactive/delegated flow, refer to:
     Connect-EntraID.ps1 (https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/Entra-ID/Authentication/Connect-EntraID.ps1)
+
+.PARAMETER GroupType
+     Optional filter to restrict results to a specific group category. Applied as a
+     server-side Graph API $filter rather than filtered client-side.
+ 
+     Accepted values:
+         All         - No filter applied (default)
+         M365        - Microsoft 365 (Unified) groups
+         Security    - Security-enabled, non-mail-enabled groups
+         Dynamic     - Groups with dynamic membership rules
+         Cloud       - Groups not synchronized from on-premises AD
+         OnPremises  - Groups synchronized from on-premises AD
 
 .PARAMETER ExportFormat
     Specifies the output format for exported data.
@@ -89,10 +104,24 @@ Modified-On     : 24 July 2026
 
     Filters results down to cloud-only groups.
 
+.EXAMPLE
+    Get-AllGroups -AccessToken $token -GroupType M365
+
+    Retrieves only Microsoft 365 (Unified) groups.
+
+.EXAMPLE
+    Get-AllGroups -AccessToken $token -GroupType Dynamic
+
+    Retrieves only groups with dynamic membership rules.
+
 .NOTES
     ─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
+        1.1 (25-Jul-2026)  - Added optional GroupType parameter (All, M365,
+                             Security, Dynamic, Cloud, OnPremises); applies a
+                             server-side $filter matching the selected category.
+                             No other logic changed.
         1.0 (24-Jul-2026)  - Initial release
 
     ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +158,10 @@ Modified-On     : 24 July 2026
             GroupTypes and SecurityEnabled/MailEnabled together to fully classify
             a group (Unified = M365 group, DynamicMembership = dynamic, neither =
             security or distribution group depending on Mail/SecurityEnabled).
+        - GroupType "Security" filters on securityEnabled eq true and mailEnabled
+           eq false, which excludes mail-enabled security groups from that
+           category. If your tenant needs mail-enabled security groups counted
+           as "Security" too, this filter will need adjusting.
         - RECOMMENDED FOR: smaller tenants, scoped/filtered pulls, or quick
             one-off/ad-hoc workarounds.
         - NOT RECOMMENDED AS-IS FOR: large/enterprise-scale tenants. For those,
@@ -154,6 +187,9 @@ Function Get-AllGroups
     param (
         [string]$AccessToken,
 
+        [ValidateSet("All", "M365", "Security", "Dynamic", "Cloud", "OnPremises")]
+        [string]$GroupType = "All",
+
         [ValidateSet("CSV")]
         [string]$ExportFormat,
 
@@ -166,6 +202,17 @@ Function Get-AllGroups
 
     # Define the initial URI to retrieve all groups with select options
     $uri = "https://graph.microsoft.com/beta/groups?`$top=100&`$select=id,displayName,createdDateTime,groupTypes,isAssignableToRole,onPremisesSyncEnabled,securityEnabled,mail,mailEnabled,membershipRule,assignedLicenses&`$count=true"
+
+    # Add GroupType filter if specified
+    switch ($GroupType)
+    {
+        "M365"       { $uri += "&`$filter=groupTypes/any(c:c eq 'Unified')" }
+        "Security"   { $uri += "&`$filter=securityEnabled eq true and mailEnabled eq false" }
+        "Dynamic"    { $uri += "&`$filter=groupTypes/any(c:c eq 'DynamicMembership')" }
+        "Cloud"      { $uri += "&`$filter=onPremisesSyncEnabled ne true" }
+        "OnPremises" { $uri += "&`$filter=onPremisesSyncEnabled eq true" }
+        # "All" (default) - no filter added
+    }
 
     # Start a do-while loop to handle pagination
     do 

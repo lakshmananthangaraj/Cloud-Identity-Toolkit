@@ -1,9 +1,9 @@
 <#
 
 Author          : Lakshmanan Thangaraj
-Version         : 1.0
+Version         : 1.1
 Created-On      : 06 May 2024
-Modified-On     : 24 July 2026
+Modified-On     : 25 July 2026
 
 .SYNOPSIS
     Retrieves all registered devices from Microsoft Entra ID using Microsoft Graph API.
@@ -21,6 +21,9 @@ Modified-On     : 24 July 2026
           identifying stale/inactive device registrations
 
     Results can optionally be exported to CSV.
+
+    Results can optionally be filtered by TrustType (e.g. AzureAd, ServerAd, Workplace)
+    to scope the query to a specific device join type.
 
     This function only accepts a direct Bearer token (AccessToken). It does not perform
     authentication itself. If you need to obtain a token via app-only (client credentials)
@@ -58,6 +61,13 @@ Modified-On     : 24 July 2026
     File path where the exported CSV output will be saved.
     Required only when ExportFormat is set to CSV.
 
+.PARAMETER TrustType
+    Optional filter to restrict results to a specific device trust type.
+    Accepted values: AzureAd, ServerAd, Workplace.
+
+    When supplied, this is applied as a Graph API $filter (trustType eq '<value>')
+    rather than filtered client-side.
+
 .INPUTS
     None. This function does not accept pipeline input.
 
@@ -77,6 +87,11 @@ Modified-On     : 24 July 2026
     Retrieves all devices and exports the result to a CSV file.
 
 .EXAMPLE
+    Get-AllDevices -AccessToken $token -TrustType "AzureAd"
+
+    Retrieves only Microsoft Entra joined (AzureAd trust type) devices.
+
+.EXAMPLE
     (Get-AllDevices -AccessToken $token) | Where-Object { $_.InactiveDays -ge 90 }
 
     Finds devices with no sign-in activity for 90+ days.
@@ -90,6 +105,13 @@ Modified-On     : 24 July 2026
     ─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
+        1.1 (25-Jul-2026)  - Added optional TrustType parameter; when supplied,
+                             applies a server-side $filter=trustType eq '<value>'
+                             to the Graph query. No other logic changed.
+                           - TrustType parameter now uses [ValidateSet("AzureAd",
+                             "ServerAd","Workplace")] so an invalid value fails
+                             fast with a clear error instead of silently
+                             returning zero results from Graph.
         1.0 (24-Jul-2026)  - Initial release
 
     ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +146,12 @@ Modified-On     : 24 July 2026
         - TrustTypeDisplay falls back to "Unknown" for any trustType value not in
             the current AzureAd/ServerAd/Workplace mapping (e.g. future Graph
             additions would need the map updated).
+        - TrustType filtering relies on an exact match against Graph's stored
+            trustType values (AzureAd, ServerAd, Workplace); typos or casing
+            mismatches will silently return zero results rather than an error.
+        - TrustType is now restricted via ValidateSet to AzureAd, ServerAd, or
+            Workplace; supplying any other value throws a parameter-binding
+            error before the function runs.
         - SINGLE-TOKEN, SEQUENTIAL PAGINATION: this function uses one static Bearer
             token for the entire pagination run and does not refresh it mid-run. In
             very large tenants, if the full pull takes longer than the token's
@@ -154,6 +182,9 @@ Function Get-AllDevices
     param (
         [string]$AccessToken,
 
+        [ValidateSet("AzureAd", "ServerAd", "Workplace")]
+        [string]$TrustType = $null,
+
         [ValidateSet("CSV")]
         [string]$ExportFormat,
 
@@ -173,6 +204,12 @@ Function Get-AllDevices
 
     # Define the initial URI to retrieve all devices with select options
     $uri = "https://graph.microsoft.com/beta/devices?`$top=100&`$select=deviceId,id,displayName,accountEnabled,operatingSystem,operatingSystemVersion,profileType,trustType,onPremisesSyncEnabled,isCompliant,isManaged,managementType,registrationDateTime,approximateLastSignInDateTime"
+
+    # Add TrustType filter if specified
+    if ($TrustType)
+    {
+        $uri += "&`$filter=trustType eq '$TrustType'"
+    }
 
     # Start a do-while loop to handle pagination
     do 
