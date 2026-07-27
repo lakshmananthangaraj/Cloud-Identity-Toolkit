@@ -93,5 +93,5 @@ New-PSModuleFromScripts `
 ```
 
 ---
-Part of the [Cloud-Identity-Toolkit](../../) `DeveloperTools` suite. See the
-[repo root README](../../README.md) for license and contribution info.
+Part of the [Cloud-Identity-Toolkit](https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit) `DeveloperTools` suite. See the
+[repository README](https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/README.md) for license and contribution information.
