@@ -43,7 +43,7 @@ subgraph group_developer["Developer automation"]
   node_module_builder["Module builder<br/>PowerShell script"]
 end
 
-node_operators(("Operators<br/>human"))
+node_operators(("Operators<br/>human & non-human<br/>(service principals, managed identities, automation)"))
 node_tenant_services[("Microsoft cloud services<br/>external services")]
 
 node_operators -->|"invoke"| node_entra_auth
@@ -148,4 +148,4 @@ Contributions, suggestions, and discussions are welcome. This repository is main
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT - see [LICENSE](./LICENSE).
