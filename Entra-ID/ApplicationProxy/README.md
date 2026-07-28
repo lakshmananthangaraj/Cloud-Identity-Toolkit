@@ -9,9 +9,7 @@
 | Script | Synopsis | Version | Last Modified |
 |---|---|---|---|
 | [Get-AppProxyApplicationDetails.ps1](./Get-AppProxyApplicationDetails.ps1) | Retrieves Azure AD Application Proxy application details using Microsoft Graph API. | 2.0 | 24 Jul 2026 |
-| [Get-AppProxyApplications.ps1](./Get-AppProxyApplications.ps1) | Scans Entra ID for applications configured with Application Proxy, analyzes
-    security posture using 2026 Zero Trust standards, and generates comprehensive
-    reports (CSV, JSON, HTML). | 2.4 | 24 Jul 2026 |
+| [Get-AppProxyApplications.ps1](./Get-AppProxyApplications.ps1) | Scans Entra ID for applications configured with Application Proxy, analyzes security posture using 2026 Zero Trust standards, and generates comprehensive reports (CSV, JSON, HTML). | 2.4 | 24 Jul 2026 |
 
 ---
 
@@ -417,4 +415,5 @@ Modified-On     : 24 July 2026
 </details>
 
 <!-- SCRIPT-CATALOG:END -->
+
 
