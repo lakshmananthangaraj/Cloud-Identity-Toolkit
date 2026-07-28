@@ -8,8 +8,7 @@
 
 | Script | Synopsis | Version | Last Modified |
 |---|---|---|---|
-| [Connect-EntraID.ps1](./Connect-EntraID.ps1) | Authenticates to Microsoft Entra ID via the OAuth2 client credentials flow
-    and provides a self-renewing bearer token for long-running scripts. | 1.1 | 09 Jul 2026 |
+| [Connect-EntraID.ps1](./Connect-EntraID.ps1) | Authenticates to Microsoft Entra ID via the OAuth2 client credentials flow and provides a self-renewing bearer token for long-running scripts. | 1.1 | 28 Jul 2026 |
 | [ConvertFrom-JwtToken.ps1](./ConvertFrom-JwtToken.ps1) | Decodes a JWT (JSON Web Token) and returns its Header and Payload claims as a single object. | 1.1 | 28 Jul 2026 |
 
 ---
@@ -190,7 +189,7 @@ Modified-On     : 05 July 2026
 ```powershell
 
 
-Name        : Lakshmanan Thangaraj
+Author      : Lakshmanan Thangaraj
 Version     : 1.1
 Created-On  : 18 March 2025
 Modified-On : 06 July 2026
@@ -282,4 +281,7 @@ Modified-On : 06 July 2026
 </details>
 
 <!-- SCRIPT-CATALOG:END -->
+
+
+
 

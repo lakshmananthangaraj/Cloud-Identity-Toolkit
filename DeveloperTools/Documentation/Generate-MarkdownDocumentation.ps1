@@ -267,7 +267,7 @@ Function Generate-MarkdownDocumentation {
             $lines.Add('|---|---|---|---|')
 
             foreach ($entry in $Entries) {
-                $synopsisCell = if ($entry.Synopsis) { $entry.Synopsis } else { '_(no synopsis found)_' }
+                $synopsisCell = if ($entry.Synopsis) { ($entry.Synopsis -replace '\s+', ' ') -replace '\|', '\|' } else { '_(no synopsis found)_' }
                 $versionCell = if ($entry.Version) { $entry.Version } else { '—' }
                 $lines.Add("| [$($entry.FileName)](./$($entry.FileName)) | $synopsisCell | $versionCell | $($entry.ModifiedOn) |")
             }

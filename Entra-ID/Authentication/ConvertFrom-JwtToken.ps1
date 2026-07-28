@@ -1,6 +1,6 @@
 <#
 
-Name        : Lakshmanan Thangaraj
+Author      : Lakshmanan Thangaraj
 Version     : 1.1
 Created-On  : 18 March 2025
 Modified-On : 06 July 2026
