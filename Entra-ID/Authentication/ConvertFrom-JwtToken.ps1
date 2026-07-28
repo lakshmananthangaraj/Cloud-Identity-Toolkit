@@ -1,10 +1,9 @@
 <#
 
-.Author
-    Name        : Lakshmanan Thangaraj
-    Version     : 1.1
-    Created-On  : 18 March 2025
-    Modified-On : 06 July 2026
+Name        : Lakshmanan Thangaraj
+Version     : 1.1
+Created-On  : 18 March 2025
+Modified-On : 06 July 2026
 
 .SYNOPSIS
     Decodes a JWT (JSON Web Token) and returns its Header and Payload claims as a single object.
