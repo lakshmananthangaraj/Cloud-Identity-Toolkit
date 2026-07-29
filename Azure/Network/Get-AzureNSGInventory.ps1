@@ -8,7 +8,8 @@ Modified-On  : 29 July 2026
 .SYNOPSIS
     Comprehensive Azure NSG Inventory and Data Collection Tool.
     Requirement 1 - Existing NSG Standardization and Compliance Assessment.
-    Step 1: NSG Inventory and Data Collection.
+    Step 1: Collect Azure NSG inventory for security analysis, compliance assessment,
+    and interactive dashboard visualization.
 
 .DESCRIPTION
     Retrieves all NSG details across all or specific Azure Subscriptions
@@ -16,7 +17,10 @@ Modified-On  : 29 July 2026
     - Inbound and outbound security rules
     - Rule priorities, protocols, source/destination, port ranges
     - Subnet and Network Interface associations
-    - Outputs a structured CSV report for baseline configuration analysis
+    - Outputs a structured CSV report that serves as the baseline dataset for:
+        - Existing NSG standardization and compliance assessments
+        - Security reviews and risk analysis
+        - Interactive HTML dashboard visualization using Generate-AzureNSGDashboard.ps1
 
 .PARAMETER SubscriptionIds
     Optional. One or more Subscription IDs (GUIDs) to target. If omitted,
@@ -35,10 +39,14 @@ Modified-On  : 29 July 2026
     None. This function does not accept pipeline input.
 
 .OUTPUTS
-    None directly to the pipeline. Writes a CSV report to disk at
-    <OutputPath>\<ReportPrefix>_<timestamp>.csv. Each row represents one
-    security rule (or, for NSGs with no rules, one placeholder row) with
-    NSG identity, association, and rule detail columns.
+    None directly to the pipeline.
+
+    Writes a structured CSV report to disk that can be:
+    - Opened directly in Excel for analysis
+    - Imported into Power BI
+    - Used as the input dataset for
+      Generate-AzureNSGDashboard.ps1 to build an interactive
+      HTML dashboard.
 
 .EXAMPLE
     # Scan all subscriptions
@@ -51,6 +59,16 @@ Modified-On  : 29 July 2026
 .EXAMPLE
     # Scan all subscriptions and save to a custom path
     Get-AzureNSGInventory -OutputPath "C:\Reports\NSG" -ReportPrefix "Prod_NSG_Baseline"
+
+.EXAMPLE
+    # Generate an interactive dashboard
+
+    Get-AzureNSGInventory -OutputPath "C:\Reports"
+
+    Generate-AzureNSGDashboard -CsvPath "C:\Reports\NSG_Inventory_<timestamp>.csv" -OpenBrowser
+
+    Collects the Azure NSG inventory and converts it into an
+    interactive HTML dashboard for security review and reporting.
 
 .NOTES
     ────────────────────────────────────────────────────────────────
@@ -116,6 +134,10 @@ Modified-On  : 29 July 2026
        row so they appear in the report.
     5. Export the combined results to a timestamped CSV file under
        -OutputPath.
+    6. The generated CSV can optionally be consumed by
+       Generate-AzureNSGDashboard.ps1 to create an interactive,
+       self-contained HTML dashboard for security analysis,
+       executive reporting, and risk visualization.
 
     ────────────────────────────────────────────────────────────────
     KNOWN LIMITATIONS
@@ -137,6 +159,14 @@ Modified-On  : 29 July 2026
       with a suggested command instead (a deliberate design choice for
       this script, distinct from other toolkit scripts that prompt to
       auto-install).
+    - Generate-AzureNSGDashboard.ps1 expects the CSV schema
+      produced by this function. If column names or output
+      structure change in future versions, the dashboard
+      function must be updated accordingly.
+
+.LINK
+    Generate-AzureNSGDashboard.ps1 - Interactive HTML dashboard for Azure NSG Inventory reports
+    https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/Azure/Network/Generate-AzureNSGDashboard.ps1
 
 .LINK
     https://learn.microsoft.com/en-us/powershell/module/az.network/get-aznetworksecuritygroup
