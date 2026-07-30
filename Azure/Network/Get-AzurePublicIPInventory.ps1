@@ -451,17 +451,17 @@ Function Get-PublicIpDashboardHtml {
         [Parameter(Mandatory)][string]$ScopeText
     )
 
-    $total = [math]::Max($Records.Count, 1)
-    $unassociated = ($Records | Where-Object IsUnassociated).Count
-    $unused = ($Records | Where-Object IsUnused).Count
-    $dynamic = ($Records | Where-Object IsDynamic).Count
-    $basicSku = ($Records | Where-Object IsBasicSku).Count
-    $noDdos = ($Records | Where-Object { -not $_.HasDdosProtection }).Count
-    $noDns = ($Records | Where-Object { -not $_.HasDnsName }).Count
-    $noTags = ($Records | Where-Object { -not $_.HasTags }).Count
-    $internetFacing = ($Records | Where-Object IsInternetFacing).Count
-    $cleanCount = ($Records | Where-Object { $_.IssueCount -eq 0 }).Count
-    $hygieneScore = [math]::Round(($cleanCount / $total) * 100)
+    $total          = [math]::Max(@($Records).Count, 1)
+    $unassociated   = @($Records | Where-Object IsUnassociated).Count
+    $unused         = @($Records | Where-Object IsUnused).Count
+    $dynamic        = @($Records | Where-Object IsDynamic).Count
+    $basicSku       = @($Records | Where-Object IsBasicSku).Count
+    $noDdos         = @($Records | Where-Object { -not $_.HasDdosProtection }).Count
+    $noDns          = @($Records | Where-Object { -not $_.HasDnsName }).Count
+    $noTags         = @($Records | Where-Object { -not $_.HasTags }).Count
+    $internetFacing = @($Records | Where-Object IsInternetFacing).Count
+    $cleanCount     = @($Records | Where-Object { $_.IssueCount -eq 0 }).Count
+    $hygieneScore   = [math]::Round(($cleanCount / $total) * 100)
 
     # -- Bar chart builder (server-rendered, no client JS required) --
     Function New-BarPanelHtml {
@@ -507,10 +507,10 @@ Function Get-PublicIpDashboardHtml {
     if (-not $internetFacingHtml) { $internetFacingHtml = "<p style=`"color:var(--muted);font-size:12px`">No internet-facing resources found.</p>" }
 
     # -- Analytics coverage bars --
-    $ddosCoveragePct = [math]::Round((($Records | Where-Object HasDdosProtection).Count / $total) * 100)
-    $dnsCoveragePct = [math]::Round((($Records | Where-Object HasDnsName).Count / $total) * 100)
-    $tagCoveragePct = [math]::Round((($Records | Where-Object HasTags).Count / $total) * 100)
-    $idleCoveragePct = [math]::Round((($Records | Where-Object IdleTimeoutConfigured).Count / $total) * 100)
+    $ddosCoveragePct = [math]::Round((@($Records | Where-Object HasDdosProtection).Count / $total) * 100)
+    $dnsCoveragePct  = [math]::Round((@($Records | Where-Object HasDnsName).Count / $total) * 100)
+    $tagCoveragePct  = [math]::Round((@($Records | Where-Object HasTags).Count / $total) * 100)
+    $idleCoveragePct = [math]::Round((@($Records | Where-Object IdleTimeoutConfigured).Count / $total) * 100)
 
     # -- JSON payload for the client-side table/detail drawer --
     $projected = $Records | ForEach-Object {
