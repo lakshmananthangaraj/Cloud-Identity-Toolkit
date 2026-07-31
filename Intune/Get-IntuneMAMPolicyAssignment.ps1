@@ -114,15 +114,15 @@ Modified-On     : 31 July 2026
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
     1.2 (31-Jul-2026) - Added -Quiet switch to suppress console progress
-        output/table for automation scenarios. Return value (hashtable
-        shape) unaffected - existing callers using $result.Assignments /
-        $result.Gaps continue to work unchanged.
+                        output/table for automation scenarios. Return value (hashtable
+                        shape) unaffected - existing callers using $result.Assignments /
+                        $result.Gaps continue to work unchanged.
     1.1 (31-Jul-2026) - Console now prints a formatted table of
-        Assignments before returning (via Out-Host, so the return value
-        passed to the caller is unaffected). Fixed gap analysis
-        incorrectly treating excluded groups (exclusionGroupAssignmentTarget)
-        as covered - only include-type assignments now count toward MAM
-        coverage.
+                        Assignments before returning (via Out-Host, so the return value
+                        passed to the caller is unaffected). Fixed gap analysis
+                        incorrectly treating excluded groups (exclusionGroupAssignmentTarget)
+                        as covered - only include-type assignments now count toward MAM
+                        coverage.
     1.0 (31-Jul-2026) - Initial release
 
     ─────────────────────────────────────────────────────────────────────────────
