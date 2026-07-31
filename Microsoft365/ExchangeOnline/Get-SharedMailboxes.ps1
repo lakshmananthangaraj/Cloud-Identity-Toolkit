@@ -165,6 +165,12 @@ Function Get-SharedMailboxes
     }
 
     Write-Verbose "Retrieved $($sharedMailboxes.Count) shared mailbox object(s)."
+
+    if (-not $sharedMailboxes -or $sharedMailboxes.Count -eq 0)
+    {
+        Write-Host "No shared mailboxes found in this environment/scope." -ForegroundColor Yellow
+        return
+    }
     #endregion
 
     #region Build report rows
