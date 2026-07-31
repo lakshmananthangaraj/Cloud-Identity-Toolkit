@@ -10,84 +10,85 @@ A curated, public toolkit of PowerShell scripts and runbooks for managing Entra 
 flowchart TD
 
 subgraph group_shared["Shared PowerShell"]
-  node_common_manifest["Common module manifest<br/>PowerShell manifest"]
+  node_common_manifest["Common module manifest<br/>PowerShell module manifest"]
   node_common_module["Common presentation module<br/>PowerShell module"]
-  node_logging["Logging helper<br/>PowerShell script<br/>[Add-Log.ps1]"]
+  node_logging["Logging helper<br/>PowerShell helper<br/>[Add-Log.ps1]"]
 end
 
-subgraph group_entra["Entra ID operations"]
-  node_entra_auth{{"Entra authentication<br/>PowerShell script"}}
-  node_jwt_inspection["JWT token inspection<br/>PowerShell script"]
-  node_directory_reporting["Directory inventory<br/>PowerShell scripts<br/>[Get-AllUsers.ps1]"]
-  node_stale_devices["Stale device report<br/>PowerShell script"]
-  node_mfa_dashboard["MFA dashboard<br/>PowerShell script"]
+subgraph group_entra["Entra ID Operations"]
+  node_entra_connect["Entra authentication<br/>PowerShell entry point"]
+  node_jwt_decoder["JWT inspection<br/>PowerShell utility"]
+  node_directory_report["Directory user inventory<br/>PowerShell report<br/>[Get-AllUsers.ps1]"]
+  node_governance_reports["Privileged access report<br/>PowerShell report"]
+  node_conditional_access["Conditional Access report<br/>PowerShell report"]
+  node_sharepoint_grant["Site Selected permission grant<br/>PowerShell write operation"]
 end
 
-subgraph group_governance["Access governance"]
-  node_privileged_roles["Privileged role analysis<br/>PowerShell script"]
-  node_conditional_access["Conditional Access report<br/>PowerShell script"]
-  node_app_proxy["Application proxy inventory<br/>PowerShell script"]
-  node_app_identity["Application identity reporting<br/>PowerShell scripts"]
-  node_site_selected_read["Site Selected permissions<br/>PowerShell script"]
-  node_site_selected_grant{{"Grant Site Selected permission<br/>PowerShell script"}}
+subgraph group_cloud["Cloud Operations"]
+  node_keyvault_secret["Key Vault secret creation<br/>PowerShell write operation"]
+  node_network_dashboard["NSG compliance dashboard<br/>PowerShell report"]
+  node_rbac_report["Azure RBAC visualization<br/>PowerShell report"]
+  node_license_alert["License threshold alert<br/>PowerShell operational action"]
+  node_mailbox_audit["Mailbox audit posture<br/>PowerShell report"]
+  node_device_compliance["Device compliance report<br/>PowerShell report"]
 end
 
-subgraph group_cloud["Azure & Microsoft 365"]
-  node_azure_admin["Azure administration<br/>PowerShell scripts"]
-  node_m365_licensing["Microsoft 365 licensing alert<br/>PowerShell script"]
+subgraph group_devtools["Developer Automation"]
+  node_script_analysis["Script quality analysis<br/>PowerShell maintenance tool"]
+  node_documentation["Markdown documentation generation<br/>PowerShell maintenance tool"]
+  node_module_builder["Script module packaging<br/>PowerShell maintenance tool"]
 end
 
-subgraph group_developer["Developer automation"]
-  node_static_analysis["Static analysis<br/>PowerShell script"]
-  node_documentation["Markdown documentation<br/>PowerShell script"]
-  node_module_builder["Module builder<br/>PowerShell script"]
+subgraph group_external["Microsoft Cloud Boundaries"]
+  node_entra_graph{{"Entra ID &amp; Microsoft Graph<br/>tenant API boundary"}}
+  node_azure{{"Azure Resource Manager &amp; Key Vault<br/>Azure API boundary"}}
+  node_m365{{"Microsoft 365 services<br/>tenant API boundary"}}
+  node_intune{{"Intune control plane<br/>tenant API boundary"}}
 end
 
-node_operators(("Operators<br/>human & non-human<br/>(service principals, managed identities, automation)"))
-node_tenant_services[("Microsoft cloud services<br/>external services")]
+node_operators(("Identity Operators &amp; Human & Workload Identities<br/>(Users, Apps, Managed Identities,<br/>Automation<br/>invokers"))
 
-node_operators -->|"invoke"| node_entra_auth
-node_operators -->|"invoke"| node_directory_reporting
-node_operators -->|"invoke"| node_privileged_roles
-node_operators -->|"authorize and invoke"| node_site_selected_grant
-node_operators -->|"invoke"| node_azure_admin
-node_operators -->|"invoke"| node_m365_licensing
 node_common_manifest -->|"declares"| node_common_module
-node_common_module -->|"includes"| node_logging
-node_entra_auth -->|"authenticates to"| node_tenant_services
-node_jwt_inspection -.->|"inspects tokens from"| node_entra_auth
-node_directory_reporting -->|"queries"| node_tenant_services
-node_stale_devices -->|"queries"| node_tenant_services
-node_mfa_dashboard -->|"queries"| node_tenant_services
-node_privileged_roles -->|"queries"| node_tenant_services
-node_conditional_access -->|"queries"| node_tenant_services
-node_app_proxy -->|"queries"| node_tenant_services
-node_app_identity -->|"queries"| node_tenant_services
-node_site_selected_read -->|"queries"| node_tenant_services
-node_site_selected_grant -->|"changes authorization"| node_tenant_services
-node_azure_admin -->|"manages and queries"| node_tenant_services
-node_m365_licensing -->|"checks licensing"| node_tenant_services
-node_static_analysis -.->|"supports maintained scripts"| node_documentation
+node_common_module -->|"loads"| node_logging
+node_operators -->|"invokes"| node_entra_connect
+node_operators -->|"invokes"| node_directory_report
+node_operators -->|"invokes"| node_governance_reports
+node_operators -->|"authorizes and invokes"| node_sharepoint_grant
+node_operators -->|"authorizes and invokes"| node_keyvault_secret
+node_operators -->|"invokes"| node_network_dashboard
+node_operators -->|"invokes"| node_license_alert
+node_operators -->|"invokes"| node_device_compliance
+node_entra_connect -->|"authenticates to"| node_entra_graph
+node_jwt_decoder -.->|"inspects tokens from"| node_entra_connect
+node_directory_report -->|"reads directory state"| node_entra_graph
+node_governance_reports -->|"reads governance state"| node_entra_graph
+node_conditional_access -->|"reads policy state"| node_entra_graph
+node_sharepoint_grant -->|"grants site permission"| node_m365
+node_keyvault_secret -->|"creates secret"| node_azure
+node_network_dashboard -->|"reads network state"| node_azure
+node_rbac_report -->|"reads RBAC state"| node_azure
+node_license_alert -->|"reads licenses and sends alert"| node_m365
+node_mailbox_audit -->|"reads mailbox posture"| node_m365
+node_device_compliance -->|"reads compliance state"| node_intune
+node_script_analysis -.->|"supports repository quality"| node_module_builder
 node_documentation -.->|"documents packaged scripts"| node_module_builder
-node_module_builder -.->|"builds modules from scripts"| node_common_module
 
 click node_common_manifest "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Modules/CloudIdentityToolkit.Common/CloudIdentityToolkit.Common.psd1"
 click node_common_module "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Modules/CloudIdentityToolkit.Common/CloudIdentityToolkit.Common.psm1"
 click node_logging "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Modules/CloudIdentityToolkit.Common/Add-Log.ps1"
-click node_entra_auth "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Authentication/Connect-EntraID.ps1"
-click node_jwt_inspection "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Authentication/ConvertFrom-JwtToken.ps1"
-click node_directory_reporting "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Users/Get-AllUsers.ps1"
-click node_stale_devices "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Devices/Get-StaleDevices.ps1"
-click node_mfa_dashboard "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/MFA/Generate-MFADashboard.ps1"
-click node_privileged_roles "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/PIM/Get-PIMActiveEntraIDRoleAssignmentDetails.ps1"
+click node_entra_connect "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Authentication/Connect-EntraID.ps1"
+click node_jwt_decoder "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Authentication/ConvertFrom-JwtToken.ps1"
+click node_directory_report "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/Users/Get-AllUsers.ps1"
+click node_governance_reports "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/PIM/Get-PIMActiveEntraIDRoleAssignmentDetails.ps1"
 click node_conditional_access "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/ConditionalAccess/Get-ConditionalAccessPoliciesReport.ps1"
-click node_app_proxy "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/ApplicationProxy/Get-AppProxyApplications.ps1"
-click node_app_identity "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/AppRegistrations/Get-AppRegistrationSecretReport.ps1"
-click node_site_selected_read "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/AppRegistrations/Get-AppSiteSelectedPermissions.ps1"
-click node_site_selected_grant "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/AppRegistrations/Grant-SharePointSiteSelectedPermission.ps1"
-click node_azure_admin "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Azure/KeyVault/New-AzureKeyVaultSecret.ps1"
-click node_m365_licensing "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Microsoft365/Licensing/Send-M365LicenseThresholdAlert.ps1"
-click node_static_analysis "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/DeveloperTools/CodeQuality/Invoke-ScriptAnalyzer.ps1"
+click node_sharepoint_grant "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Entra-ID/AppRegistrations/Grant-SharePointSiteSelectedPermission.ps1"
+click node_keyvault_secret "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Azure/KeyVault/New-AzureKeyVaultSecret.ps1"
+click node_network_dashboard "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Azure/Network/Generate-AzureNSGComplianceDashboard.ps1"
+click node_rbac_report "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Azure/RBAC/Generate-RBACVisualizationReport.ps1"
+click node_license_alert "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Microsoft365/Licensing/Send-M365LicenseThresholdAlert.ps1"
+click node_mailbox_audit "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Microsoft365/ExchangeOnline/Get-MailboxAuditStatus.ps1"
+click node_device_compliance "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/Intune/Get-DeviceComplianceReport.ps1"
+click node_script_analysis "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/DeveloperTools/CodeQuality/Invoke-ScriptAnalyzer.ps1"
 click node_documentation "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/DeveloperTools/Documentation/Generate-MarkdownDocumentation.ps1"
 click node_module_builder "https://github.com/lakshmananthangaraj/cloud-identity-toolkit/blob/main/DeveloperTools/ModuleBuilder/New-PSModuleFromScripts.ps1"
 
@@ -99,11 +100,11 @@ classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
 classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
 classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
 class node_common_manifest,node_common_module,node_logging toneBlue
-class node_entra_auth,node_jwt_inspection,node_directory_reporting,node_stale_devices,node_mfa_dashboard toneAmber
-class node_privileged_roles,node_conditional_access,node_app_proxy,node_app_identity,node_site_selected_read,node_site_selected_grant toneMint
-class node_azure_admin,node_m365_licensing toneRose
-class node_static_analysis,node_documentation,node_module_builder toneIndigo
-class node_operators,node_tenant_services toneNeutral
+class node_entra_connect,node_jwt_decoder,node_directory_report,node_governance_reports,node_conditional_access,node_sharepoint_grant toneAmber
+class node_keyvault_secret,node_network_dashboard,node_rbac_report,node_license_alert,node_mailbox_audit,node_device_compliance toneMint
+class node_script_analysis,node_documentation,node_module_builder toneRose
+class node_entra_graph,node_azure,node_m365,node_intune toneIndigo
+class node_operators toneNeutral
 ```
 
 ## What's Included
@@ -122,7 +123,6 @@ This is a long-term, continuously growing project. Planned additions include:
 
 - **AWS IAM** — identity governance and access analysis
 - **Microsoft Defender** — security posture and alert automation
-- **Microsoft Intune** — device compliance and configuration management scripts
 
 Follow the repo or ⭐ star it to track progress as these areas are added.
 
