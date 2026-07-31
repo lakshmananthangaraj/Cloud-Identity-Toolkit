@@ -1,38 +1,54 @@
-# SharePoint Online PowerShell
+# SharePoint Online PowerShell Automation
 
-This folder contains PowerShell scripts for managing and reporting on **Microsoft SharePoint Online** using **PnP PowerShell**.
+Reusable PowerShell scripts for reporting on and managing **Microsoft SharePoint Online**, built on the **PnP PowerShell** module.
 
-The scripts are designed for administrators, cloud engineers, Microsoft 365 engineers, and IT professionals who need to automate SharePoint Online administration.
+This folder is part of the [Cloud-Identity-Toolkit](../../) — a collection of automation scripts for Microsoft Entra ID, Azure, and Microsoft 365 identity and security operations.
 
----
-
-# Prerequisites
-
-Before running any script in this folder, ensure the following prerequisites are completed.
-
-- PowerShell 7.x (Recommended)
-- Microsoft Entra ID Tenant
-- SharePoint Online Administrator or appropriate permissions
-- PnP PowerShell Module
-- An Entra ID Application Registration with certificate-based authentication
+**Who this is for:** Microsoft 365 administrators, cloud/security engineers, and IT professionals who want to automate day-to-day SharePoint Online administration and reporting instead of relying on manual, click-through steps in the admin portal. No deep PowerShell background is required to run the scripts — each one is documented with clear parameters and examples.
 
 ---
 
-# Install Required Module
+## What's in this folder
 
-Install the latest supported PnP PowerShell module.
+| Script | What it does |
+|---|---|
+| `Get-SharePointSites.ps1` | Lists every SharePoint Online site in the tenant, including communication sites and team sites — a quick inventory of what exists. |
+| `Get-SharePointSiteOwners.ps1` | Identifies the owner(s) of each site, so accountability and ongoing management are clear. |
+| `Get-SharePointSitePermissions.ps1` | Reports who (users and groups) has access to a site and at what permission level. |
+| `Get-SharePointStorageUsageReport.ps1` | Reports how much storage each site is consuming, useful for capacity planning and cost tracking. |
+| `Get-SharePointExternalSharingReport.ps1` | Reports external sharing settings and identifies external (guest) users with access — an important check for data governance and security. |
+
+Each script includes built-in help (comment-based help), so running `Get-Help .\<ScriptName>.ps1 -Full` in PowerShell will show its purpose, parameters, and usage examples.
+
+---
+
+## Before you start (Prerequisites)
+
+To run these scripts, you'll need:
+
+- **PowerShell 7.x** (recommended)
+- A **Microsoft Entra ID** tenant
+- **SharePoint Online Administrator** rights, or an account with equivalent permissions
+- The **PnP PowerShell** module installed
+- An **Entra ID App Registration** configured with certificate-based authentication (this is the recommended, more secure alternative to storing a username and password)
+
+> **Why certificate-based authentication?** It allows scripts to run unattended (for example, on a schedule) without ever storing a password, and it's the approach Microsoft recommends for production automation.
+
+---
+
+## Step 1: Install the PnP PowerShell module
 
 ```powershell
 Install-Module PnP.PowerShell -Scope CurrentUser
 ```
 
-If the module is already installed:
+If it's already installed, keep it current:
 
 ```powershell
 Update-Module PnP.PowerShell
 ```
 
-Verify installation:
+Confirm it installed correctly:
 
 ```powershell
 Get-Module PnP.PowerShell -ListAvailable
@@ -40,11 +56,9 @@ Get-Module PnP.PowerShell -ListAvailable
 
 ---
 
-# Create an Entra ID Application
+## Step 2: Register an Entra ID application
 
-PnP PowerShell supports creating an Entra ID application automatically.
-
-Replace the placeholder values with your own tenant information.
+PnP PowerShell can register the required Entra ID application for you. Replace every placeholder (the values in `<angle brackets>`) with details specific to your tenant.
 
 ```powershell
 Register-PnPAzureADApp `
@@ -62,15 +76,13 @@ Register-PnPAzureADApp `
     )
 ```
 
-> **Note**
->
-> Never hardcode passwords, client IDs, tenant names, or certificates in production scripts. Use secure secret management solutions such as **Azure Key Vault** whenever possible.
+> **Security note:** Never hardcode passwords, client IDs, tenant names, or certificate secrets directly in a script — especially one that will be shared, committed to source control, or scheduled to run automatically. Use a secure secret store such as **Azure Key Vault** instead, and reference secrets from there at runtime.
 
 ---
 
-# Connect to SharePoint Online
+## Step 3: Connect to SharePoint Online
 
-Create a secure password object.
+Build a secure credential object:
 
 ```powershell
 $password = ConvertTo-SecureString `
@@ -79,7 +91,7 @@ $password = ConvertTo-SecureString `
     -Force
 ```
 
-Connect using certificate authentication.
+Then connect using certificate authentication:
 
 ```powershell
 Connect-PnPOnline `
@@ -92,151 +104,64 @@ Connect-PnPOnline `
 
 ---
 
-# Verify Connection
-
-Run the following command.
+## Step 4: Verify the connection
 
 ```powershell
 Get-PnPWeb
 ```
 
-If the connection is successful, SharePoint Online site information will be returned.
+A successful connection returns basic information about the SharePoint site — confirming you're ready to run the scripts in this folder.
 
 ---
 
-# Folder Contents
+## Security best practices
 
-| Script | Description |
-|---------|-------------|
-| Get-SharePointSites.ps1 | Lists all SharePoint Online sites |
-| Get-SharePointSiteOwners.ps1 | Retrieves site owners |
-| Get-SharePointSitePermissions.ps1 | Reports site permissions |
-| Get-SharePointStorageUsageReport.ps1 | Generates storage usage report |
-| Get-SharePointExternalSharingReport.ps1 | Reports external sharing configuration |
+These scripts are built with the following principles in mind, and it's worth carrying them into how you run and maintain them:
 
----
-
-# Security Best Practices
-
-- Use certificate-based authentication.
-- Never store passwords inside scripts.
-- Grant only the minimum required permissions.
-- Rotate certificates regularly.
-- Store certificates securely.
-- Consider Azure Key Vault for production environments.
+- Prefer certificate-based authentication over passwords wherever possible.
+- Never store credentials or secrets inside a script.
+- Grant only the minimum permissions required for the task (principle of least privilege).
+- Rotate certificates on a regular schedule.
+- Store certificates in a protected location, with access restricted to those who need it.
+- For production or scheduled automation, use **Azure Key Vault** (or an equivalent secret manager) rather than local files.
 
 ---
 
-# Useful Learning Resources
+## Learning resources
 
-## Microsoft Learn
+**Microsoft Learn**
+- [SharePoint documentation](https://learn.microsoft.com/sharepoint)
+- [Microsoft Entra ID documentation](https://learn.microsoft.com/entra)
+- [Microsoft Graph documentation](https://learn.microsoft.com/graph)
+- [Microsoft 365 documentation](https://learn.microsoft.com/microsoft-365)
+- [Microsoft Learn training paths](https://learn.microsoft.com/training/)
+- [Microsoft Graph PowerShell SDK](https://learn.microsoft.com/powershell/microsoftgraph/)
+- [SharePoint developer documentation](https://learn.microsoft.com/sharepoint/dev/)
 
-- Microsoft SharePoint Documentation
-- Microsoft Entra ID Documentation
-- Microsoft Graph Documentation
+**PnP PowerShell**
+- [PnP PowerShell home](https://pnp.github.io/powershell/)
+- [Authentication guide](https://pnp.github.io/powershell/articles/authentication.html)
+- [Registering an Entra ID application](https://pnp.github.io/powershell/articles/registerapplication.html)
+- [Connect-PnPOnline reference](https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html)
+- [Register-PnPEntraIDApp reference](https://pnp.github.io/powershell/cmdlets/Register-PnPEntraIDApp.html)
 
-## PnP PowerShell
-
-Official PnP PowerShell documentation
-
-## Authentication
-
-PnP PowerShell Authentication Guide
-
-## Registering an Entra ID Application
-
-PnP PowerShell App Registration Guide
-
----
-
----
-
-# Official Documentation
-
-The following official resources provide detailed guidance on SharePoint Online, PnP PowerShell, Microsoft Graph, and Microsoft Entra ID.
-
-## Microsoft Learn
-
-| Resource | Description |
-|----------|-------------|
-| Microsoft SharePoint Documentation | Official documentation for SharePoint Online administration, development, and best practices. |
-| Microsoft Entra ID Documentation | Learn about Microsoft Entra ID, identity management, authentication, and application registrations. |
-| Microsoft Graph Documentation | Official Microsoft Graph REST API and PowerShell documentation. |
-| Microsoft 365 Documentation | Official Microsoft 365 administration documentation. |
-
-### Direct Links
-
-- Microsoft SharePoint Documentation
-  https://learn.microsoft.com/sharepoint
-
-- Microsoft Entra ID Documentation
-  https://learn.microsoft.com/entra
-
-- Microsoft Graph Documentation
-  https://learn.microsoft.com/graph
-
-- Microsoft 365 Documentation
-  https://learn.microsoft.com/microsoft-365
+**Video walkthrough**
+- [Configuring PnP PowerShell authentication and connecting to SharePoint Online](https://www.youtube.com/watch?v=yPd4Lqx08NI)
 
 ---
 
-# Official PnP PowerShell Documentation
+## Getting help / troubleshooting
 
-PnP PowerShell is the recommended community-driven PowerShell module for Microsoft 365 and SharePoint Online automation.
+If a script isn't behaving as expected, work through this checklist before raising an issue:
 
-### Documentation
-
-- PnP PowerShell Home
-  https://pnp.github.io/powershell/
-
-- Authentication Guide
-  https://pnp.github.io/powershell/articles/authentication.html
-
-- Register an Entra ID Application
-  https://pnp.github.io/powershell/articles/registerapplication.html
-
-- Connect-PnPOnline Cmdlet
-  https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html
-
-- Register-PnPEntraIDApp Cmdlet
-  https://pnp.github.io/powershell/cmdlets/Register-PnPEntraIDApp.html
+1. Confirm you're running the latest version of **PnP PowerShell**.
+2. Confirm the Entra ID application has been granted the required Microsoft Graph and SharePoint permissions.
+3. Confirm admin consent has been granted for those permissions, where required.
+4. Review the official documentation linked above for guidance specific to the error you're seeing.
+5. If the issue persists, open an issue in this GitHub repository with the exact error message and the steps that led to it — that context makes it much faster to diagnose.
 
 ---
 
-# Video Tutorial
+## A note on authentication
 
-The following video provides a practical walkthrough for configuring PnP PowerShell authentication and connecting to SharePoint Online.
-
-▶️ https://www.youtube.com/watch?v=yPd4Lqx08NI
-
----
-
-# Additional Learning Resources
-
-- Microsoft Learn Training
-  https://learn.microsoft.com/training/
-
-- Microsoft Graph PowerShell SDK
-  https://learn.microsoft.com/powershell/microsoftgraph/
-
-- SharePoint Developer Documentation
-  https://learn.microsoft.com/sharepoint/dev/
-
----
-
-# Support
-
-If you encounter any issues with the scripts in this repository:
-
-1. Verify that the latest version of **PnP PowerShell** is installed.
-2. Ensure the required Microsoft Graph and SharePoint permissions have been granted to the Microsoft Entra ID application.
-3. Confirm that administrator consent has been granted where required.
-4. Review the official documentation referenced above for troubleshooting guidance.
-5. If the issue persists, consider raising an issue in this GitHub repository with detailed error information.
-
-
----
-
-# Notes
-
-This repository uses **certificate-based authentication**, which is Microsoft's recommended approach for secure automation and unattended PowerShell execution.
+This folder standardizes on **certificate-based authentication**, which is Microsoft's recommended approach for secure, unattended PowerShell automation. If you're adapting these scripts for your own environment, we'd encourage keeping that same approach rather than falling back to interactive or password-based sign-in.
