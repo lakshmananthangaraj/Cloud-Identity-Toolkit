@@ -2,7 +2,7 @@
 
 Reusable PowerShell scripts for reporting on and managing **Microsoft SharePoint Online**, built on the **PnP PowerShell** module.
 
-This folder is part of the [Cloud-Identity-Toolkit](../../) — a collection of automation scripts for Microsoft Entra ID, Azure, and Microsoft 365 identity and security operations.
+This folder is part of the [Cloud-Identity-Toolkit](https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit) - a collection of automation scripts for Microsoft Entra ID, Azure, and Microsoft 365 identity and security operations.
 
 **Who this is for:** Microsoft 365 administrators, cloud/security engineers, and IT professionals who want to automate day-to-day SharePoint Online administration and reporting instead of relying on manual, click-through steps in the admin portal. No deep PowerShell background is required to run the scripts — each one is documented with clear parameters and examples.
 
