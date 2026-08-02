@@ -17,8 +17,15 @@ Modified-On     : 02 August 2026
           /$count endpoints - no full member listing is downloaded)
         - lastActivityDate / daysSinceActivity (via the Graph usage report
           getTeamsTeamActivityDetail, joined by Team Id so real display
-          names are always shown regardless of the tenant's report
-          concealment setting - see Get-TeamInactive for the same technique)
+          names are shown when the tenant's report concealment setting is
+          off - see Get-TeamInactive for the same technique. NOTE: if the
+          tenant has "Display concealed user, group, and site names in all
+          reports" enabled, Microsoft Graph anonymizes the Team Id itself
+          (returned as 00000000-0000-0000-0000-000000000000 for every row)
+          in addition to Team Name, in which case this join cannot recover
+          real activity data and lastActivityDate will show "Could not be
+          confirmed" for all teams - this is a tenant admin-center setting,
+          not something this script can work around)
 
     From these it derives a single LifecycleStage per team, evaluated in
     priority order:
@@ -105,6 +112,15 @@ Modified-On     : 02 August 2026
         - Requires a valid bearer token with the specified permissions.
         - Activity report data can lag by up to 48 hours per Microsoft's
             documented refresh cadence.
+        - If the tenant has "Display concealed user, group, and site names
+            in all reports" enabled (M365 admin center > Org Settings >
+            Services > Reports), Microsoft Graph anonymizes the Team Id
+            itself (all rows return 00000000-0000-0000-0000-000000000000),
+            not just Team Name. In that case the Team Id join used here
+            cannot recover real activity data, and lastActivityDate will
+            show "Could not be confirmed" for every team. A Global Admin
+            must disable that setting for this report to return usable
+            data; changes take up to 48 hours to reflect.
         - LifecycleStage priority order means a team with 0 owners AND no
             activity is reported only as "Ownerless" (the more severe
             condition), not both - check ownerCount/daysSinceActivity columns
@@ -301,7 +317,8 @@ Function Get-TeamLifecycleReport
 
         if (-not $reportSkip)
         {
-            $csvRows = $reportPartial.Content | ConvertFrom-Csv
+            $csvContent = [System.Text.Encoding]::UTF8.GetString($reportPartial.Content)
+            $csvRows = $csvContent | ConvertFrom-Csv
             foreach ($row in $csvRows)
             {
                 $teamIdProp = $row.PSObject.Properties['Team Id']
@@ -328,8 +345,15 @@ Function Get-TeamLifecycleReport
                 $ageInDays = $null
                 if ($createdRaw)
                 {
-                    $createdDate = $null
-                    if ([DateTime]::TryParse($createdRaw, [ref]$createdDate)) { $ageInDays = ((Get-Date) - $createdDate).Days }
+                    if ($createdRaw -is [DateTime])
+                    {
+                        $ageInDays = ((Get-Date) - $createdRaw).Days
+                    }
+                    else
+                    {
+                        $createdDate = $null
+                        if ([DateTime]::TryParse([string]$createdRaw, [ref]$createdDate)) { $ageInDays = ((Get-Date) - $createdDate).Days }
+                    }
                 }
 
                 # ── Counts via lightweight /$count endpoints ────────────────
@@ -352,7 +376,7 @@ Function Get-TeamLifecycleReport
                     else
                     {
                         $parsed = $null
-                        if ([DateTime]::TryParse($lastActivityRaw, [ref]$parsed))
+                        if ([DateTime]::TryParse([string]$lastActivityRaw, [ref]$parsed))
                         {
                             $lastActivityDate = $parsed.ToString("yyyy-MM-dd")
                             $daysSinceActivity = ((Get-Date) - $parsed).Days
