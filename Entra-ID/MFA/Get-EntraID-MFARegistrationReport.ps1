@@ -1,9 +1,9 @@
 <#
 
 Author          : Lakshmanan Thangaraj
-Version         : 2.1
+Version         : 2.2
 Created-On      : 09 April 2024
-Modified-On     : 05 July 2026
+Modified-On     : 04 August 2026
 
 .SYNOPSIS
     Retrieves user data and MFA registration details from Entra ID using
@@ -32,6 +32,22 @@ Modified-On     : 05 July 2026
         - Passwordless phone sign-in
         - Software OATH token
 
+    The following privileged-role details are collected per user (v2.2+):
+        - IsPrivileged: true if the user holds an Entra directory role flagged
+          as privileged by Microsoft (isPrivileged=true on the role definition)
+          and/or a role named in -CustomPrivilegedRoles
+        - PrivilegedRoles: display names of all matching role assignments
+        - PrivilegedAssignmentType: Active, Eligible, or Both (Eligible is only
+          populated when -IncludeEligibleRoles is supplied and the tenant is
+          licensed for PIM/Entra ID P2)
+        - PrivilegedRoleSource: BuiltIn, Custom, or Both
+        - UpnPatternFlag: true if the UPN matches common admin/service-account
+          naming patterns (admin, svc-, priv, break-glass, tier0/1, etc.) —
+          a naming-convention signal only, independent of actual role data
+        - RoleUpnMismatch: true when UpnPatternFlag and IsPrivileged disagree —
+          surfaces both governance gaps (real admins not following naming
+          convention) and false positives (naming pattern with no real role)
+
     The final report is exported as a CSV file to C:\Temp\EntraID-Users-MFAReport.CSV.
 
 .PARAMETER ClientId
@@ -57,6 +73,18 @@ Modified-On     : 05 July 2026
     prerequisites) and exits immediately. No authentication is attempted and
     no other parameters are required when this switch is used.
 
+.PARAMETER IncludeEligibleRoles
+    Switch. When supplied, also queries PIM-eligible directory role
+    assignments (roleEligibilityScheduleInstances) in addition to active
+    assignments. Requires Entra ID P2. If the tenant is not licensed for
+    PIM, the eligible-role lookup is skipped with a warning and active-only
+    results are still returned — the script does not hard-fail.
+
+.PARAMETER CustomPrivilegedRoles
+    String array. Additional role display names (exact match, case-insensitive)
+    to treat as privileged on top of Microsoft's built-in isPrivileged flag.
+    Example: -CustomPrivilegedRoles "Exchange Administrator","Helpdesk Administrator"
+
 .INPUTS
     None. This script does not accept pipeline input.
 
@@ -81,6 +109,13 @@ Modified-On     : 05 July 2026
     .\Get-EntraID-MFARegistrationReport.ps1 -ClientId "8ad5d2f5-xxxx" -ClientSecret $secret -TenantId "f4310b4f-xxxx" -OutputPath "D:\Reports\MFAReport.CSV"
 
     With custom output path
+
+.EXAMPLE
+    $secret = Read-Host -Prompt "Enter client secret" -AsSecureString
+    .\Get-EntraID-MFARegistrationReport.ps1 -ClientId "8ad5d2f5-xxxx" -ClientSecret $secret -TenantId "f4310b4f-xxxx" -IncludeEligibleRoles -CustomPrivilegedRoles "Exchange Administrator"
+
+    Includes PIM-eligible role assignments and treats "Exchange Administrator"
+    as privileged in addition to Microsoft's built-in privileged roles.
 
 .NOTES
     ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +151,24 @@ Modified-On     : 05 July 2026
                              mandatory-parameter prompting or auth attempt.
                              No other logic, template, or console output was
                              changed in this version.
+        2.2 (04-Aug-2026)  - Added real privileged-role detection to replace
+                             UPN-pattern-only signal used downstream. New
+                             Get-PrivilegedRoleAssignments function queries
+                             roleManagement/directory/roleDefinitions (for the
+                             built-in isPrivileged flag), active assignments
+                             via roleAssignmentScheduleInstances, and — when
+                             -IncludeEligibleRoles is supplied — eligible
+                             assignments via roleEligibilityScheduleInstances.
+                           - Added -IncludeEligibleRoles and
+                             -CustomPrivilegedRoles parameters.
+                           - Added IsPrivileged, PrivilegedRoles,
+                             PrivilegedAssignmentType, PrivilegedRoleSource,
+                             UpnPatternFlag, and RoleUpnMismatch columns to
+                             the CSV output. UpnPatternFlag reuses the same
+                             regex as Generate-MFADashboard.ps1's isAdminLike()
+                             so both scripts agree on naming-pattern detection.
+                           - No changes to existing MFA-method collection
+                             logic or column set — purely additive.
 
     ─────────────────────────────────────────────────────────────────────────────
     Pre-Requisites:
@@ -125,12 +178,17 @@ Modified-On     : 05 July 2026
                AuditLog.Read.All                 (Application)
                Directory.Read.All                (Application)
                UserAuthenticationMethod.Read.All (Application)
+               RoleManagement.Read.Directory     (Application)  — added in 2.2
 
         2. Entra ID tenant must have Azure AD Premium P1 or P2 license.
            The signInActivity property is license-gated and returns HTTP 403
            on tenants without a qualifying license.
 
-        3. PowerShell 5.1 or later.
+        3. Entra ID P2 is required only if -IncludeEligibleRoles is used
+           (roleEligibilityScheduleInstances is a PIM/P2 feature). Without
+           P2, omit the switch — active-role detection works on P1.
+
+        4. PowerShell 5.1 or later.
 
     ─────────────────────────────────────────────────────────────────────────────
     Functions:
@@ -163,6 +221,19 @@ Modified-On     : 05 July 2026
             Processes each method type via switch and maps properties into a
             flat PSCustomObject with 22 fields covering all supported MFA types.
 
+        Get-PrivilegedRoleAssignments
+            Builds a per-user lookup of privileged directory-role assignments.
+            Queries role definitions once for the built-in isPrivileged flag,
+            then active assignments (and eligible assignments, if requested)
+            once each — not per-user — to keep Graph call volume flat regardless
+            of tenant size. Returns a hashtable keyed by principalId so the
+            main loop can do an O(1) lookup per user.
+
+        Test-UpnAdminPattern
+            Regex check for admin/service-account-looking UPNs. Kept as an
+            independent, non-authoritative signal alongside real role data —
+            not a replacement for it.
+
     ─────────────────────────────────────────────────────────────────────────────
     EXECUTION FLOW
     ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +256,13 @@ Modified-On     : 05 July 2026
           brief moment required to build the OAuth token request body. This is
           inherent to the client-credentials grant type, not a script-level
           shortcut.
+        - Privileged-role detection covers Entra ID directory roles only
+          (via roleManagement/directory). It does not cover Azure RBAC roles,
+          PIM for Groups, or application-level admin roles inside SaaS apps —
+          those are out of scope for this script.
+        - If -IncludeEligibleRoles is used on a tenant without Entra ID P2,
+          the eligible-role query returns an error which is caught and logged
+          as a warning; the report still generates using active-role data only.
 
 .LINK
     Microsoft Graph API - List Users
@@ -197,6 +275,10 @@ Modified-On     : 05 July 2026
 .LINK
     Microsoft Graph API - signInActivity
     https://learn.microsoft.com/en-us/graph/api/resources/signinactivity
+
+.LINK
+    Microsoft Graph API - unifiedRoleAssignmentScheduleInstance (PIM)
+    https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleassignmentscheduleinstance
 
 #>
 
@@ -213,6 +295,12 @@ param (
     [Parameter(ParameterSetName = "Run")]
     [string]$OutputPath = "C:\Temp\EntraID-Users-MFAReport.CSV",
 
+    [Parameter(ParameterSetName = "Run")]
+    [switch]$IncludeEligibleRoles,
+
+    [Parameter(ParameterSetName = "Run")]
+    [string[]]$CustomPrivilegedRoles,
+
     [Parameter(ParameterSetName = "Help")]
     [switch]$ShowHelp
 )
@@ -224,13 +312,13 @@ Function Show-FriendlyHelp
     Write-Host ""
     Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║          Entra ID — MFA Registration Report Generator        ║" -ForegroundColor Cyan
-    Write-Host "  ║                   Version 2.1  |  Help                       ║" -ForegroundColor Cyan
+    Write-Host "  ║                   Version 2.2  |  Help                       ║" -ForegroundColor Cyan
     Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  What this script does:" -ForegroundColor Yellow
     Write-Host "    Connects to Entra ID via Microsoft Graph (app-only auth) and pulls"
-    Write-Host "    every user's profile, manager, and MFA method registrations into"
-    Write-Host "    one CSV report."
+    Write-Host "    every user's profile, manager, MFA method registrations, and"
+    Write-Host "    privileged directory-role assignments into one CSV report."
     Write-Host ""
     Write-Host "  Required parameters:" -ForegroundColor Yellow
     Write-Host "    -ClientId      Application (client) ID of your Azure AD app registration"
@@ -238,14 +326,17 @@ Function Show-FriendlyHelp
     Write-Host "    -TenantId      Directory (tenant) ID of the Entra ID tenant to query"
     Write-Host ""
     Write-Host "  Optional parameters:" -ForegroundColor Yellow
-    Write-Host "    -OutputPath    Where to save the CSV (default: C:\Temp\EntraID-Users-MFAReport.CSV)"
-    Write-Host "    -ShowHelp      Shows this guide and exits, no connection is attempted"
+    Write-Host "    -OutputPath             Where to save the CSV (default: C:\Temp\EntraID-Users-MFAReport.CSV)"
+    Write-Host "    -IncludeEligibleRoles   Also check PIM-eligible role assignments (needs Entra ID P2)"
+    Write-Host "    -CustomPrivilegedRoles  Extra role names to treat as privileged, e.g. 'Exchange Administrator'"
+    Write-Host "    -ShowHelp               Shows this guide and exits, no connection is attempted"
     Write-Host ""
     Write-Host "  Before you run it:" -ForegroundColor Yellow
     Write-Host "    1. Your app registration needs these Graph API Application permissions,"
     Write-Host "       admin-consented: User.Read.All, AuditLog.Read.All, Directory.Read.All,"
-    Write-Host "       UserAuthenticationMethod.Read.All"
+    Write-Host "       UserAuthenticationMethod.Read.All, RoleManagement.Read.Directory"
     Write-Host "    2. Your tenant needs Azure AD Premium P1 or P2 for sign-in activity data."
+    Write-Host "    3. -IncludeEligibleRoles additionally needs Entra ID P2 (PIM). Omit it on P1."
     Write-Host ""
     Write-Host "  Example:" -ForegroundColor Yellow
     Write-Host '    $secret = Read-Host -Prompt "Client secret" -AsSecureString'
@@ -670,6 +761,149 @@ Function Get-MFAAuthenticationMethods
 }
 
 
+#--------------------------------------------------------------------------------------------------- [ Function to check UPN against admin/service-account naming patterns ]
+Function Test-UpnAdminPattern
+{
+    param (
+        [string]$UserPrincipalName
+    )
+
+    # Same regex as Generate-MFADashboard.ps1's isAdminLike() JS helper, kept
+    # in sync deliberately so both scripts agree on what a "naming pattern"
+    # match looks like. This is a heuristic signal only — see IsPrivileged
+    # (from Get-PrivilegedRoleAssignments) for the authoritative role check.
+    if ([string]::IsNullOrWhiteSpace($UserPrincipalName)) { return $false }
+    return [bool]([regex]::IsMatch($UserPrincipalName, 'admin|adm\b|svc-|svc_|service|priv|break.?glass|tier0|tier1', 'IgnoreCase'))
+}
+
+
+#--------------------------------------------------------------------------------------------------- [ Function to build a per-user lookup of privileged directory-role assignments ]
+Function Get-PrivilegedRoleAssignments
+{
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$AccessToken,
+
+        [string[]]$CustomPrivilegedRoles,
+
+        [switch]$IncludeEligibleRoles
+    )
+
+    # Keyed by principalId → PSCustomObject with accumulating role info.
+    # Built once per run, not per user — keeps Graph call volume flat
+    # regardless of tenant size.
+    $lookup = @{}
+
+    Function Add-RoleHit
+    {
+        param($PrincipalId, $RoleDisplayName, $IsBuiltInPrivileged, $IsCustomPrivileged, $AssignmentType)
+
+        if (-not $lookup.ContainsKey($PrincipalId))
+        {
+            $lookup[$PrincipalId] = [PSCustomObject]@{
+                PrivilegedRoles    = New-Object System.Collections.Generic.List[string]
+                AssignmentTypes    = New-Object System.Collections.Generic.List[string]
+                Sources            = New-Object System.Collections.Generic.List[string]
+            }
+        }
+
+        if ($IsBuiltInPrivileged -or $IsCustomPrivileged)
+        {
+            $entry = $lookup[$PrincipalId]
+            if (-not $entry.PrivilegedRoles.Contains($RoleDisplayName)) { $entry.PrivilegedRoles.Add($RoleDisplayName) }
+            if (-not $entry.AssignmentTypes.Contains($AssignmentType))  { $entry.AssignmentTypes.Add($AssignmentType) }
+
+            $source = if ($IsBuiltInPrivileged -and $IsCustomPrivileged) { 'Both' } elseif ($IsBuiltInPrivileged) { 'BuiltIn' } else { 'Custom' }
+            if (-not $entry.Sources.Contains($source)) { $entry.Sources.Add($source) }
+        }
+    }
+
+    RenewTokenIfNeeded
+    $token = $global:accessToken
+    $headers = @{ "Authorization" = "Bearer $token" }
+
+    # 1. Role definitions — one call, gives us isPrivileged per role ID
+    $roleDefinitions = @{}
+    Try
+    {
+        $defUri = "https://graph.microsoft.com/beta/roleManagement/directory/roleDefinitions?`$select=id,displayName,isPrivileged"
+        do
+        {
+            $defResp = Invoke-RestMethod -Uri $defUri -Headers $headers -Method Get -ErrorAction Stop
+            foreach ($def in $defResp.value)
+            {
+                $roleDefinitions[$def.id] = [PSCustomObject]@{
+                    DisplayName  = $def.displayName
+                    IsPrivileged = [bool]$def.isPrivileged
+                }
+            }
+            $defUri = if ($defResp.PSObject.Properties['@odata.nextLink']) { $defResp.'@odata.nextLink' } else { $null }
+        } until (-not $defUri)
+    }
+    Catch
+    {
+        Write-Warning "Could not retrieve role definitions (RoleManagement.Read.Directory permission required). Privileged-role columns will be blank. Details: $($_.Exception.Message)"
+        return $lookup
+    }
+
+    $customSet = @()
+    if ($CustomPrivilegedRoles) { $customSet = $CustomPrivilegedRoles | ForEach-Object { $_.Trim().ToLowerInvariant() } }
+
+    # 2. Active role assignments — one call (paginated), not per user
+    Try
+    {
+        $activeUri = "https://graph.microsoft.com/beta/roleManagement/directory/roleAssignmentScheduleInstances?`$select=principalId,roleDefinitionId"
+        do
+        {
+            RenewTokenIfNeeded
+            $headers = @{ "Authorization" = "Bearer $global:accessToken" }
+            $activeResp = Invoke-RestMethod -Uri $activeUri -Headers $headers -Method Get -ErrorAction Stop
+            foreach ($a in $activeResp.value)
+            {
+                $def = $roleDefinitions[$a.roleDefinitionId]
+                if (-not $def) { continue }
+                $isCustom = $customSet -contains $def.DisplayName.ToLowerInvariant()
+                Add-RoleHit -PrincipalId $a.principalId -RoleDisplayName $def.DisplayName -IsBuiltInPrivileged $def.IsPrivileged -IsCustomPrivileged $isCustom -AssignmentType 'Active'
+            }
+            $activeUri = if ($activeResp.PSObject.Properties['@odata.nextLink']) { $activeResp.'@odata.nextLink' } else { $null }
+        } until (-not $activeUri)
+    }
+    Catch
+    {
+        Write-Warning "Could not retrieve active role assignments. Privileged-role columns may be incomplete. Details: $($_.Exception.Message)"
+    }
+
+    # 3. Eligible role assignments — only when requested, requires Entra ID P2 (PIM)
+    if ($IncludeEligibleRoles)
+    {
+        Try
+        {
+            $eligUri = "https://graph.microsoft.com/beta/roleManagement/directory/roleEligibilityScheduleInstances?`$select=principalId,roleDefinitionId"
+            do
+            {
+                RenewTokenIfNeeded
+                $headers = @{ "Authorization" = "Bearer $global:accessToken" }
+                $eligResp = Invoke-RestMethod -Uri $eligUri -Headers $headers -Method Get -ErrorAction Stop
+                foreach ($e in $eligResp.value)
+                {
+                    $def = $roleDefinitions[$e.roleDefinitionId]
+                    if (-not $def) { continue }
+                    $isCustom = $customSet -contains $def.DisplayName.ToLowerInvariant()
+                    Add-RoleHit -PrincipalId $e.principalId -RoleDisplayName $def.DisplayName -IsBuiltInPrivileged $def.IsPrivileged -IsCustomPrivileged $isCustom -AssignmentType 'Eligible'
+                }
+                $eligUri = if ($eligResp.PSObject.Properties['@odata.nextLink']) { $eligResp.'@odata.nextLink' } else { $null }
+            } until (-not $eligUri)
+        }
+        Catch
+        {
+            Write-Warning "Could not retrieve PIM-eligible role assignments. This usually means the tenant lacks Entra ID P2, or RoleManagement.Read.Directory was not granted. Continuing with active-role data only. Details: $($_.Exception.Message)"
+        }
+    }
+
+    return $lookup
+}
+
+
 #--------------------------------------------------------------------------------------------------- [ Script Execution ]
 
 Clear-Host
@@ -691,7 +925,7 @@ If ((Test-Path "C:\Temp") -eq $false)
 Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "  ║          Entra ID — MFA Registration Report Generator        ║" -ForegroundColor Cyan
-Write-Host "  ║                      Version 2.1  |  2026                    ║" -ForegroundColor Cyan
+Write-Host "  ║                      Version 2.2  |  2026                    ║" -ForegroundColor Cyan
 Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
@@ -746,6 +980,19 @@ Write-Host ""
 Write-Host "  ✅ $totalUsers users retrieved successfully" -ForegroundColor Green
 Write-Host ""
 
+# ── Step 2b : Privileged Role Lookup ─────────────────────────────────────────
+Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+Write-Host "  │   STEP 2b     ›  Resolving Privileged Role Assignments      │" -ForegroundColor DarkCyan
+Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+Write-Host ""
+Write-Host "  ⏳ Querying role definitions and assignments (tenant-wide, once)..." -ForegroundColor Yellow
+
+# One-time, tenant-wide lookup — not called per user — keyed by principalId.
+$privilegedRoleLookup = Get-PrivilegedRoleAssignments -AccessToken $global:accessToken -CustomPrivilegedRoles $CustomPrivilegedRoles -IncludeEligibleRoles:$IncludeEligibleRoles
+
+Write-Host "  ✅ Privileged role data resolved for $($privilegedRoleLookup.Count) principals" -ForegroundColor Green
+Write-Host ""
+
 # Initialize an empty array to store all user reports
 $allUserReports = @()
 
@@ -777,6 +1024,17 @@ foreach ($user in $users)
    
     # Get MFA Authentication methods for each user
     $mfaAuthenticationMehtods = Get-MFAAuthenticationMethods -AccessToken $accessToken -UserId $user.id
+
+    # Resolve privileged-role data for this user (O(1) hashtable lookup, no extra API call)
+    $roleHit = $privilegedRoleLookup[$user.id]
+    $isPrivileged             = [bool]($roleHit -and $roleHit.PrivilegedRoles.Count -gt 0)
+    $privilegedRolesJoined    = if ($roleHit) { ($roleHit.PrivilegedRoles -join '; ') } else { '' }
+    $privilegedAssignmentType = if ($roleHit -and $roleHit.AssignmentTypes.Count -gt 0) { ($roleHit.AssignmentTypes | Sort-Object -Unique) -join '+' } else { '' }
+    $privilegedRoleSource     = if ($roleHit -and $roleHit.Sources.Count -gt 0) { ($roleHit.Sources | Sort-Object -Unique) -join '+' } else { '' }
+
+    # Independent naming-pattern signal — deliberately not derived from role data
+    $upnPatternFlag = Test-UpnAdminPattern -UserPrincipalName $user.userPrincipalName
+    $roleUpnMismatch = [bool]($isPrivileged -ne $upnPatternFlag)
 
     # Increment the count of all user reports
     $allUserReport = [PSCustomObject]@{
@@ -816,6 +1074,12 @@ foreach ($user in $users)
         'passwordAuthDeviceTag'                    = $mfaAuthenticationMehtods.passwordAuthDeviceTag
         'passwordAuthPhoneAppVersion'              = $mfaAuthenticationMehtods.passwordAuthPhoneAppVersion
         'softwareOath'                             = $mfaAuthenticationMehtods.softwareOath
+        'IsPrivileged'                              = $isPrivileged
+        'PrivilegedRoles'                           = $privilegedRolesJoined
+        'PrivilegedAssignmentType'                  = $privilegedAssignmentType
+        'PrivilegedRoleSource'                      = $privilegedRoleSource
+        'UpnPatternFlag'                             = $upnPatternFlag
+        'RoleUpnMismatch'                           = $roleUpnMismatch
     }
     
     # Add the inactive user to the array
