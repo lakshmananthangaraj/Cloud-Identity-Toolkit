@@ -1,9 +1,9 @@
 <#
 
 Author          : Lakshmanan Thangaraj
-Version         : 2.1
+Version         : 2.2
 Created-On      : 12 June 2026
-Modified-On     : 05 July 2026
+Modified-On     : 04 August 2026
 
 .SYNOPSIS
     Generates a modern HTML security dashboard from an Entra ID MFA Registration
@@ -15,7 +15,9 @@ Modified-On     : 05 July 2026
     by Get-EntraID-MFARegistrationReport.ps1 and render a multi-tab, interactive
     HTML dashboard with the following tabs:
 
-      • Overview          – KPI tiles, MFA health ring, risk distribution,
+      • Overview          – KPI tiles (incl. confirmed Privileged-No-MFA and
+                            Naming/Role Mismatch counts, click-through to Risk
+                            & Findings), MFA health ring, risk distribution,
                             method adoption bars, user-type donut, account health
       • Users             – Searchable, filterable, sortable user directory with
                             per-user detail panel, prev/next navigation, MFA method
@@ -32,7 +34,7 @@ Modified-On     : 05 July 2026
                             sync status tracking
       • Recommendations   – 7 actionable remediation cards sorted by severity with
                             step-by-step guidance and compliance tag labels
-      • Raw Data          – Full 36-column CSV data viewer with search, department
+      • Raw Data          – Full 42-column CSV data viewer with search, department
                             filter, type filter, account filter, pagination,
                             Export Raw CSV, and Copy to Clipboard
       • Executive Summary – Board-ready one-page posture snapshot with overall
@@ -77,7 +79,9 @@ Modified-On     : 05 July 2026
     Path to the MFA registration CSV file produced by
     Get-EntraID-MFARegistrationReport.ps1.
 
-    Expected columns (36 total):
+    Expected columns (42 total, v2.2+; the 6 privileged-role columns are
+    optional — older v2.0/2.1 CSVs with 36 columns still load, with those
+    columns rendering blank):
         LoginName, Email, DisplayName, UserType, IsOn-PremSynced,
         AccountEnabled, CreateDateTime, Department,
         LastSuccessfulSignInDateTime, LastSignInDate,
@@ -91,7 +95,9 @@ Modified-On     : 05 July 2026
         fido2CreatedDate, fido2Model, TAPAuthenticationIsUsable,
         TAPAuthenticationStartDateTime, TAPAuthenticationLifetime,
         TAPAuthenticationIsUsableOnce, passwordlessDisplayName,
-        passwordAuthDeviceTag, passwordAuthPhoneAppVersion, softwareOath
+        passwordAuthDeviceTag, passwordAuthPhoneAppVersion, softwareOath,
+        IsPrivileged, PrivilegedRoles, PrivilegedAssignmentType,
+        PrivilegedRoleSource, UpnPatternFlag, RoleUpnMismatch
 
 .PARAMETER OutputPath
     Full file path where the generated HTML dashboard will be saved.
@@ -185,6 +191,71 @@ Modified-On     : 05 July 2026
                              No other logic, template, styling, or dashboard
                              behaviour was changed in this version.
 
+        2.2 (04-Aug-2026)  - Added real Entra directory-role privileged detection,
+                             consumed from the 6 new columns produced by
+                             Get-EntraID-MFARegistrationReport.ps1 v2.2
+                             (IsPrivileged, PrivilegedRoles,
+                             PrivilegedAssignmentType, PrivilegedRoleSource,
+                             UpnPatternFlag, RoleUpnMismatch).
+                           - Added isReallyPrivileged() and isRoleUpnMismatch()
+                             helpers. isAdminLike() is unchanged and now treated
+                             as a secondary, unconfirmed naming-pattern signal
+                             alongside the authoritative role-based check.
+                           - riskScore() reweighted: confirmed privileged + no
+                             MFA is now +25 (was previously +20 for naming-
+                             pattern-only); naming-pattern-only with no confirmed
+                             role is now +10, reflecting its lower confidence.
+                           - Risk & Findings: replaced the single "Admin/Service
+                             Accounts Without MFA" finding with three findings —
+                             confirmed-privileged-without-MFA (critical),
+                             naming-match-without-confirmed-role (high), and
+                             confirmed-privileged-nonstandard-naming (medium) —
+                             so naming-pattern false positives/negatives are
+                             surfaced as their own governance signal rather than
+                             conflated with the security finding.
+                           - Per-user detail panel: added Privileged Role and
+                             Naming/Role Mismatch chips, plus a Privileged
+                             Roles / Assignment Type / Role Source info block.
+                           - Raw Data tab: added the 6 new columns (42 total).
+                             RAW_COLS drives header, row, search, and CSV export
+                             generically, so no other Raw Data logic changed.
+
+                           - Overview tab: added two new KPI tiles surfacing the
+                             two highest-value privileged-role signals directly
+                             on the landing page instead of only inside Risk &
+                             Findings — "Privileged, No MFA" (critical, red) and
+                             "Naming/Role Mismatches" (governance, amber). Both
+                             tiles are clickable and jump straight to the Risk &
+                             Findings tab.
+                           - Added $privNoMFA and $roleMismatchCount PS-side
+                             calculations (mirrors the existing JS
+                             isReallyPrivileged()+hasMFA() logic used in risk
+                             scoring, so the KPI tile and the Risk tab numbers
+                             cannot drift out of sync).
+                           - Added __PRIVNOMFA__ / __ROLEMISMATCH__ tokens to
+                             the template substitution chain. No other tab,
+                             helper function, or JSON schema changed.
+
+                           - Raw Data tab: added two new filter dropdowns —
+                             Privileged (All / Privileged Only / Non-Privileged)
+                             and Role/Naming Mismatch (Any / Mismatch Only) —
+                             plus a one-click "👑 Privileged Only" toggle button
+                             next to the existing filters, so privileged users
+                             can be isolated without typing a search term.
+                           - Raw Data rows: privileged and naming-mismatch rows
+                             now get a subtle full-row background tint (not just
+                             a colored cell far right in a 42-column table), and
+                             the LoginName cell is prefixed with 👑/🪪 so a
+                             privileged or mismatched user is identifiable while
+                             scanning/scrolling without hunting for the right
+                             column.
+                           - Added .btn.active CSS state so the quick-filter
+                             toggle button visibly shows when engaged, and kept
+                             it in sync if the Privileged dropdown is changed
+                             directly instead of via the button.
+                           - No changes to JSON schema, other tabs, export
+                             functions, or existing filter behaviour.
+
     ─────────────────────────────────────────────────────────────────────────────
     Security Standards Coverage (v2.0):
     ─────────────────────────────────────────────────────────────────────────────
@@ -205,8 +276,11 @@ Modified-On     : 05 July 2026
     Pre-Requisites:
     ─────────────────────────────────────────────────────────────────────────────
         1. PowerShell 5.1 or later.
-        2. A valid CSV file generated by Get-EntraID-MFARegistrationReport.ps1
-           v2.0 or later, containing all 36 expected columns.
+        2. A valid CSV file generated by Get-EntraID-MFARegistrationReport.ps1.
+           v2.2 or later (42 columns) is required for privileged-role chips,
+           findings, and Raw Data columns to populate. CSVs from v2.0–2.1
+           (36 columns) still load — the 6 privileged-role columns simply
+           render blank and those findings/chips show zero affected users.
         3. A modern browser (Chrome, Edge, Firefox) to view the HTML dashboard.
            Internet Explorer is not supported.
 
@@ -302,7 +376,7 @@ Function Generate-MFADashboard
     {
         Write-Host ""
         Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║          MFA Registration Dashboard  v2.1            ║" -ForegroundColor Cyan
+        Write-Host "║          MFA Registration Dashboard  v2.2            ║" -ForegroundColor Cyan
         Write-Host "║                  Friendly Help                       ║" -ForegroundColor Cyan
         Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host ""
@@ -321,7 +395,7 @@ Function Generate-MFADashboard
         Write-Host ""
         Write-Host "  Before you run it:" -ForegroundColor Yellow
         Write-Host "    1. You need a CSV already produced by Get-EntraID-MFARegistrationReport.ps1"
-        Write-Host "       (v2.0 or later, with all 36 expected columns)."
+        Write-Host "       (v2.2 or later for privileged-role columns; v2.0/2.1 CSVs still load)."
         Write-Host "    2. Use a modern browser (Chrome, Edge, Firefox) to view the result."
         Write-Host ""
         Write-Host "  Example:" -ForegroundColor Yellow
@@ -481,6 +555,20 @@ Function Generate-MFADashboard
     }).Count
     $healthScore = if ($enabledCount -gt 0) { [math]::Round(($enabledWithMFA / $enabledCount) * 100, 0) } else { 0 }
 
+    # Confirmed privileged (real Entra role data) with no MFA registered — highest-confidence
+    # critical finding, mirrors the JS isReallyPrivileged()+hasMFA() logic used in risk scoring.
+    $privNoMFA = @($enabledUsers | Where-Object {
+        (Get-StrVal $_ 'IsPrivileged') -eq 'True' -and
+        (Get-StrVal $_ 'microsoftAuthenticatorDisplayName') -eq '' -and
+        (Get-StrVal $_ 'phoneAuthenticationNumber')        -eq '' -and
+        (Get-StrVal $_ 'WHFBDisplayName')                  -eq '' -and
+        (Get-StrVal $_ 'fido2DisplayName')                 -eq '' -and
+        (Get-StrVal $_ 'softwareOath') -in @('','False')
+    }).Count
+
+    # UPN/role naming mismatches — either direction (RoleUpnMismatch column set by the collector)
+    $roleMismatchCount = @($users | Where-Object { (Get-StrVal $_ 'RoleUpnMismatch') -eq 'True' }).Count
+
     $mfaPct           = if ($total -gt 0) { [math]::Round(($anyMFA  / $total) * 100, 1) } else { 0 }
     $phishResistantPct= if ($total -gt 0) { [math]::Round(($phishResistant / $total) * 100, 1) } else { 0 }
     $stale90Pct       = if ($enabledCount -gt 0) { [math]::Round(($stale90 / $enabledCount) * 100, 1) } else { 0 }
@@ -530,8 +618,14 @@ Function Generate-MFADashboard
         $plDT = ConvertTo-JsonSafe (Get-StrVal $u 'passwordAuthDeviceTag')
         $plV  = ConvertTo-JsonSafe (Get-StrVal $u 'passwordAuthPhoneAppVersion')
         $soath= ConvertTo-JsonSafe (Get-StrVal $u 'softwareOath')
+        $isPriv    = ConvertTo-JsonSafe (Get-StrVal $u 'IsPrivileged')
+        $privRoles = ConvertTo-JsonSafe (Get-StrVal $u 'PrivilegedRoles')
+        $privType  = ConvertTo-JsonSafe (Get-StrVal $u 'PrivilegedAssignmentType')
+        $privSrc   = ConvertTo-JsonSafe (Get-StrVal $u 'PrivilegedRoleSource')
+        $upnFlag   = ConvertTo-JsonSafe (Get-StrVal $u 'UpnPatternFlag')
+        $roleMismatch = ConvertTo-JsonSafe (Get-StrVal $u 'RoleUpnMismatch')
 
-        "{`"ln`":`"$ln`",`"email`":`"$em`",`"dn`":`"$dn`",`"ut`":`"$ut`",`"sync`":`"$sync`",`"ae`":`"$ae`",`"cdt`":`"$cdt`",`"dept`":`"$dept`",`"lsi`":`"$lsi`",`"lnisi`":`"$lnisi`",`"lssi`":`"$lssi`",`"mgr`":`"$mgr`",`"mgrU`":`"$mgrU`",`"mgrM`":`"$mgrM`",`"ph`":`"$ph`",`"phT`":`"$phT`",`"sms`":`"$sms`",`"pwCr`":`"$pwCr`",`"emA`":`"$emA`",`"whN`":`"$whN`",`"whC`":`"$whC`",`"whKS`":`"$whKS`",`"msN`":`"$msN`",`"msDT`":`"$msDT`",`"msV`":`"$msV`",`"f2N`":`"$f2N`",`"f2D`":`"$f2D`",`"f2M`":`"$f2M`",`"tapU`":`"$tapU`",`"tapS`":`"$tapS`",`"tapL`":`"$tapL`",`"tapO`":`"$tapO`",`"plN`":`"$plN`",`"plDT`":`"$plDT`",`"plV`":`"$plV`",`"soath`":`"$soath`"}"
+        "{`"ln`":`"$ln`",`"email`":`"$em`",`"dn`":`"$dn`",`"ut`":`"$ut`",`"sync`":`"$sync`",`"ae`":`"$ae`",`"cdt`":`"$cdt`",`"dept`":`"$dept`",`"lsi`":`"$lsi`",`"lnisi`":`"$lnisi`",`"lssi`":`"$lssi`",`"mgr`":`"$mgr`",`"mgrU`":`"$mgrU`",`"mgrM`":`"$mgrM`",`"ph`":`"$ph`",`"phT`":`"$phT`",`"sms`":`"$sms`",`"pwCr`":`"$pwCr`",`"emA`":`"$emA`",`"whN`":`"$whN`",`"whC`":`"$whC`",`"whKS`":`"$whKS`",`"msN`":`"$msN`",`"msDT`":`"$msDT`",`"msV`":`"$msV`",`"f2N`":`"$f2N`",`"f2D`":`"$f2D`",`"f2M`":`"$f2M`",`"tapU`":`"$tapU`",`"tapS`":`"$tapS`",`"tapL`":`"$tapL`",`"tapO`":`"$tapO`",`"plN`":`"$plN`",`"plDT`":`"$plDT`",`"plV`":`"$plV`",`"soath`":`"$soath`",`"isPriv`":`"$isPriv`",`"privRoles`":`"$privRoles`",`"privType`":`"$privType`",`"privSrc`":`"$privSrc`",`"upnFlag`":`"$upnFlag`",`"roleMismatch`":`"$roleMismatch`"}"
     }) -join ','
 
     $deptJson = ($deptGroups | ForEach-Object {
@@ -616,6 +710,7 @@ kbd{display:inline-block;padding:1px 5px;background:var(--surface3);border:1px s
 /* ── BUTTONS ── */
 .btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--radius-sm);font-size:12.5px;font-family:var(--sans);cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted2);transition:all .2s;white-space:nowrap}
 .btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(79,142,247,.08)}
+.btn.active{border-color:var(--red);color:var(--red);background:rgba(248,81,73,.1)}
 .btn-group{display:flex;gap:8px;flex-wrap:wrap}
 
 /* ── KPI GRID ── */
@@ -927,6 +1022,8 @@ select option{background:var(--surface2)}
     <div class="kpi purple"><div class="kpi-icon">🛡️</div><div class="kpi-val">__PHISHR__</div><div class="kpi-sub">Phishing-Resistant</div><span class="kpi-trend good">__PHISHRPCT__%</span></div>
     <div class="kpi amber"><div class="kpi-icon">📱</div><div class="kpi-val">__SMSONLY__</div><div class="kpi-sub">SMS-Only (Weak)</div></div>
     <div class="kpi cyan"><div class="kpi-icon">🔄</div><div class="kpi-val">__SYNCED__</div><div class="kpi-sub">Hybrid Synced</div></div>
+    <div class="kpi red" onclick="showPage('risk', document.querySelector('.nb[onclick*=&quot;risk&quot;]'))" style="cursor:pointer" title="Jump to Risk &amp; Findings"><div class="kpi-icon">👑</div><div class="kpi-val">__PRIVNOMFA__</div><div class="kpi-sub">Privileged, No MFA</div></div>
+    <div class="kpi amber" onclick="showPage('risk', document.querySelector('.nb[onclick*=&quot;risk&quot;]'))" style="cursor:pointer" title="Jump to Risk &amp; Findings"><div class="kpi-icon">🪪</div><div class="kpi-val">__ROLEMISMATCH__</div><div class="kpi-sub">Naming/Role Mismatches</div></div>
     <div class="kpi red"><div class="kpi-icon">💤</div><div class="kpi-val">__STALE90__</div><div class="kpi-sub">Stale 90+ Days</div><span class="kpi-trend bad">__STALE90PCT__%</span></div>
   </div>
 
@@ -1120,7 +1217,7 @@ select option{background:var(--surface2)}
   <div class="ph">
     <div class="ph-left">
       <h2>Raw Data</h2>
-      <p>Full unfiltered CSV data — all 36 columns as imported</p>
+      <p>Full unfiltered CSV data — all 42 columns as imported</p>
     </div>
     <div class="btn-group">
       <button class="btn" onclick="exportRawCSV()">⬇ Export Raw CSV</button>
@@ -1145,6 +1242,16 @@ select option{background:var(--surface2)}
       <option value="True">Enabled</option>
       <option value="False">Disabled</option>
     </select>
+    <select id="rawPrivFilter" onchange="filterRaw()">
+      <option value="">All Users</option>
+      <option value="priv">👑 Privileged Only</option>
+      <option value="nonpriv">Non-Privileged Only</option>
+    </select>
+    <select id="rawMismatchFilter" onchange="filterRaw()">
+      <option value="">Any Naming Status</option>
+      <option value="mismatch">🪪 Role/Naming Mismatch Only</option>
+    </select>
+    <button class="btn" id="rawPrivQuick" onclick="quickPrivFilter()" title="One-click: show only confirmed privileged accounts">👑 Privileged Only</button>
     <div class="psize-wrap">
       Show <select id="rawPageSel" onchange="chRawPageSize()"><option>20</option><option>50</option><option>100</option><option value="99999">All</option></select>
     </div>
@@ -1414,7 +1521,11 @@ function riskScore(u){
   let s=0;
   if(!hasMFA(u)&&u.ae==='True') s+=40;
   else if(isSMSOnly(u)&&u.ae==='True') s+=20;
-  if(isAdminLike(u)&&!hasMFA(u)&&u.ae==='True') s+=20; // admin without MFA = extra weight
+  // Confirmed privileged (real Entra role data) without MFA carries the most weight —
+  // this is a known attack path, not a guess. Naming-pattern-only matches (isAdminLike)
+  // get a smaller weight since they're an unconfirmed heuristic, not a verified role.
+  if(isReallyPrivileged(u)&&!hasMFA(u)&&u.ae==='True') s+=25;
+  else if(isAdminLike(u)&&!hasMFA(u)&&u.ae==='True') s+=10;
   if(isStale(u,90)&&u.ae==='True') s+=15;
   if(isStale(u,30)&&!isStale(u,90)&&u.ae==='True') s+=8;
   if(u.tapU==='True') s+=10;
@@ -1422,6 +1533,16 @@ function riskScore(u){
 }
 function isAdminLike(u){
   return /admin|adm\b|svc-|svc_|service|priv|break.?glass|tier0|tier1/i.test(u.ln||'');
+}
+// Real Entra directory-role check (built-in isPrivileged flag and/or -CustomPrivilegedRoles),
+// resolved once in Get-EntraID-MFARegistrationReport.ps1's Get-PrivilegedRoleAssignments and
+// carried into the CSV as IsPrivileged. Independent of the UPN naming pattern above by design —
+// see isRoleUpnMismatch() for where the two signals disagree.
+function isReallyPrivileged(u){
+  return u.isPriv==='True';
+}
+function isRoleUpnMismatch(u){
+  return u.roleMismatch==='True';
 }
 function riskLabel(s){
   if(s>=40) return {l:'Critical',cls:'chip-red'};
@@ -1676,6 +1797,8 @@ function renderDP(u){
   if(isStale(u,30)&&!isStale(u,90)&&u.ae==='True') risks.push({sev:'low',t:'Stale Account (30–90 days)',d:'No sign-in in 30–90 days. Monitor for continued inactivity.'});
   if(u.tapU==='True') risks.push({sev:'medium',t:'Active TAP Credential',d:`A Temporary Access Pass is active (started: ${u.tapS||'unknown'}, lifetime: ${u.tapL||'unknown'} min). Ensure it was issued intentionally.`});
   if(u.ut==='Guest'&&!hasMFA(u)) risks.push({sev:'high',t:'Guest Account Without MFA',d:'External guest accounts without MFA represent a significant risk, especially for collaboration data access.'});
+  if(isReallyPrivileged(u)&&!hasMFA(u)&&u.ae==='True') risks.push({sev:'critical',t:'Confirmed Privileged Role Without MFA',d:`This account holds a confirmed privileged Entra role (${escH(u.privRoles)||'role name unavailable'}) with no MFA registered — highest-priority remediation target.`});
+  if(isRoleUpnMismatch(u)) risks.push({sev:'low',t:'Naming / Role Mismatch',d: isReallyPrivileged(u) ? 'This account holds a confirmed privileged role but its UPN does not follow admin/service naming conventions — a governance gap worth reviewing.' : 'This UPN matches admin/service naming conventions but holds no confirmed privileged role — worth double-checking it is not over- or under-provisioned.'});
 
   const methodsHtml=(()=>{
     const ms=[];
@@ -1700,6 +1823,8 @@ function renderDP(u){
       <span class="chip ${rb.cls}">${rb.l} Risk</span>
       ${hasMFA(u)?'<span class="chip chip-green">🔐 MFA Registered</span>':'<span class="chip chip-red">⚠ No MFA</span>'}
       ${isPhishR(u)?'<span class="chip chip-purple">🛡 Phish-Resistant</span>':''}
+      ${isReallyPrivileged(u)?'<span class="chip chip-red">👑 Privileged Role</span>':''}
+      ${isRoleUpnMismatch(u)?'<span class="chip chip-amber">⚑ Naming/Role Mismatch</span>':''}
     </div>
     <div class="dp-section">
       <div class="dp-stitle">Identity Details</div>
@@ -1712,6 +1837,9 @@ function renderDP(u){
         <div class="info-row"><span class="info-label">Manager</span><span class="info-val">${escH(u.mgr)||'—'}</span></div>
         <div class="info-row"><span class="info-label">Manager UPN</span><span class="info-val">${escH(u.mgrU)||'—'}</span></div>
         <div class="info-row"><span class="info-label">Manager Email</span><span class="info-val">${escH(u.mgrM)||'—'}</span></div>
+        <div class="info-row"><span class="info-label">Privileged Roles</span><span class="info-val">${escH(u.privRoles)||'—'}</span></div>
+        <div class="info-row"><span class="info-label">Assignment Type</span><span class="info-val">${escH(u.privType)||'—'}</span></div>
+        <div class="info-row"><span class="info-label">Role Source</span><span class="info-val">${escH(u.privSrc)||'—'}</span></div>
       </div>
     </div>
     <div class="dp-section">
@@ -1794,11 +1922,25 @@ function copyText(t,btn){
       action:'Define a roadmap to increase phishing-resistant MFA adoption. Prioritise privileged/admin roles first. Deploy FIDO2 hardware keys for admins and high-risk users. Enable Windows Hello for Business for Windows-joined devices. Use Conditional Access Authentication Strength to enforce phishing-resistant MFA for sensitive apps.',
     },
 	{
-      sev:'critical',title:'Admin / Service Accounts Without MFA',
-      body:`Accounts with admin-like naming patterns (admin, adm, svc, service, priv) that have no MFA registered. These accounts typically hold elevated privileges and represent the highest-priority risk in any identity estate.`,
-      stats:[{l:'Admin-like accounts without MFA',v:enabled.filter(u=>isAdminLike(u)&&!hasMFA(u)).length}],
-      affected:enabled.filter(u=>isAdminLike(u)&&!hasMFA(u)),
-      action:'Immediately enrol all admin and service accounts in MFA. For service accounts, consider using Workload Identity Federation or Managed Identities instead of interactive credentials. Enforce phishing-resistant MFA (FIDO2/WHFB) for all privileged roles via Conditional Access Authentication Strength.',
+      sev:'critical',title:'Privileged Accounts Without MFA',
+      body:`Users holding a confirmed Entra directory role (built-in privileged role or a custom-flagged role) with no MFA registered. This is verified against actual role assignments -- active and, where collected, PIM-eligible -- not just naming patterns, so this is the highest-confidence privileged-risk finding in the report.`,
+      stats:[{l:'Privileged accounts without MFA',v:enabled.filter(u=>isReallyPrivileged(u)&&!hasMFA(u)).length}],
+      affected:enabled.filter(u=>isReallyPrivileged(u)&&!hasMFA(u)),
+      action:'Immediately enrol all privileged accounts in MFA. Enforce phishing-resistant MFA (FIDO2/WHFB) for privileged roles via Conditional Access Authentication Strength. Consider PIM approval and justification requirements plus a break-glass account review.',
+    },
+    {
+      sev:'high',title:'Admin-Named Accounts Without a Confirmed Privileged Role',
+      body:`Accounts whose UPN matches admin/service-account naming conventions (admin, svc-, priv, break-glass, tier0/1, etc.) but which do NOT hold any confirmed privileged Entra role. These may be legitimate service accounts using unprivileged app permissions, decommissioned admin accounts that were never renamed, or accounts worth double-checking for over-provisioned access that isn't role-based.`,
+      stats:[{l:'Naming match, no confirmed role',v:USERS.filter(u=>isAdminLike(u)&&!isReallyPrivileged(u)).length}],
+      affected:USERS.filter(u=>isAdminLike(u)&&!isReallyPrivileged(u)),
+      action:"Review each account: confirm whether it should hold a role and doesn't (governance gap), or whether the naming convention is simply stale and the account can be renamed or retired. Do not treat naming pattern alone as proof of privilege.",
+    },
+    {
+      sev:'medium',title:'Confirmed Privileged Roles Not Following Naming Convention',
+      body:`Users holding a confirmed privileged Entra role whose UPN does NOT match the organisation's admin/service naming pattern. This is a naming-governance gap, not a security vulnerability by itself -- but it makes privileged accounts harder to spot during manual reviews, audits, and incident response.`,
+      stats:[{l:'Privileged, non-standard naming',v:USERS.filter(u=>isReallyPrivileged(u)&&!isAdminLike(u)).length}],
+      affected:USERS.filter(u=>isReallyPrivileged(u)&&!isAdminLike(u)),
+      action:'Consider adopting a consistent naming or tagging convention for privileged accounts to speed up manual triage. Not a substitute for proper Conditional Access or PIM controls -- those should already apply regardless of naming.',
     },
   ].filter(f=>f.stats[0].v>0||(typeof f.stats[0].v==='string'));
 
@@ -2563,6 +2705,12 @@ const RAW_COLS = [
   {k:'plDT',  h:'passwordAuthDeviceTag'},
   {k:'plV',   h:'passwordAuthPhoneAppVersion'},
   {k:'soath', h:'softwareOath'},
+  {k:'isPriv',       h:'IsPrivileged'},
+  {k:'privRoles',    h:'PrivilegedRoles'},
+  {k:'privType',     h:'PrivilegedAssignmentType'},
+  {k:'privSrc',      h:'PrivilegedRoleSource'},
+  {k:'upnFlag',      h:'UpnPatternFlag'},
+  {k:'roleMismatch', h:'RoleUpnMismatch'},
 ];
 
 // Build header row once
@@ -2598,11 +2746,18 @@ function filterRaw(){
   const dept = document.getElementById('rawDeptFilter').value;
   const type = document.getElementById('rawTypeFilter').value;
   const acct = document.getElementById('rawAcctFilter').value;
+  const priv = document.getElementById('rawPrivFilter').value;
+  const mism = document.getElementById('rawMismatchFilter').value;
+
+  document.getElementById('rawPrivQuick').classList.toggle('active', priv === 'priv');
 
   rawFiltered = USERS.filter(u => {
     if(dept && u.dept !== dept) return false;
     if(type && u.ut   !== type) return false;
     if(acct && u.ae   !== acct) return false;
+  if(priv === 'priv'    && u.isPriv !== 'True') return false;
+  if(priv === 'nonpriv' && u.isPriv === 'True') return false;
+  if(mism === 'mismatch' && u.roleMismatch !== 'True') return false;
     if(q){
       // search across all column values
       return RAW_COLS.some(c => (u[c.k]||'').toLowerCase().includes(q));
@@ -2610,6 +2765,14 @@ function filterRaw(){
     return true;
   });
   rawPage = 1; renderRaw();
+}
+
+// One-click shortcut for the most common "find privileged users" ask —
+// sets the Privileged dropdown and re-filters without extra clicks.
+function quickPrivFilter(){
+  const sel = document.getElementById('rawPrivFilter');
+  sel.value = sel.value === 'priv' ? '' : 'priv';
+  filterRaw();
 }
 
 function renderRaw(){
@@ -2628,18 +2791,31 @@ function renderRaw(){
     if(key==='sync') return val==='True'  ? 'color:var(--accent)' : '';
     if(key==='tapU') return val==='True'  ? 'color:var(--amber)'  : '';
     if(key==='ut')   return val==='Guest' ? 'color:var(--accent3)': '';
+    if(key==='isPriv') return val==='True' ? 'color:var(--red);font-weight:600' : '';
+    if(key==='roleMismatch') return val==='True' ? 'color:var(--amber)' : '';
     return '';
   }
 
-  document.getElementById('rawTblBody').innerHTML = sl.map(u =>
-    `<tr onclick="openDP('${escJ(u.ln||u.email)}')" title="Click to view full details">${
+  document.getElementById('rawTblBody').innerHTML = sl.map(u => {
+    const isPrivRow = u.isPriv === 'True';
+    const isMismatchRow = u.roleMismatch === 'True';
+    const rowStyle = isPrivRow ? 'background:rgba(248,81,73,.07)' : isMismatchRow ? 'background:rgba(210,153,34,.06)' : '';
+    return `<tr onclick="openDP('${escJ(u.ln||u.email)}')" title="Click to view full details" style="${rowStyle}">${
       RAW_COLS.map(c => {
         const v = u[c.k] || '';
         const s = cellStyle(c.k, v);
-        return `<td style="white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:11px;${s}" title="${escH(v)}">${escH(v)||'<span style="color:var(--border2)">—</span>'}</td>`;
+        // Badge the LoginName cell itself so privileged/mismatch rows are
+        // identifiable at a glance while scrolling a 42-column-wide table,
+        // not just via the colored isPriv/roleMismatch cells far to the right.
+        let display = escH(v)||'<span style="color:var(--border2)">—</span>';
+        if(c.k === 'ln'){
+          if(isPrivRow) display = `👑 ${display}`;
+          else if(isMismatchRow) display = `🪪 ${display}`;
+        }
+        return `<td style="white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:11px;${s}" title="${escH(v)}">${display}</td>`;
       }).join('')
-    }</tr>`
-  ).join('');
+    }</tr>`;
+  }).join('');
 
   renderRawPgn();
 }
@@ -2730,6 +2906,8 @@ document.addEventListener('keydown',e=>{
         -replace '__PHISHRPCT__',     $phishResistantPct `
         -replace '__SMSONLY__',       $smsOnly `
         -replace '__SYNCED__',        $synced `
+        -replace '__PRIVNOMFA__',     $privNoMFA `
+        -replace '__ROLEMISMATCH__',  $roleMismatchCount `
         -replace '__STALE90__',       $stale90 `
         -replace '__STALE90PCT__',    $stale90Pct `
         -replace '__HEALTHSCORE__',   $healthScore `
@@ -2745,7 +2923,7 @@ document.addEventListener('keydown',e=>{
 
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║   ✅  MFA Dashboard v1.0 — generated!                ║" -ForegroundColor Cyan
+    Write-Host "║   ✅  MFA Dashboard v2.2 — generated!                ║" -ForegroundColor Cyan
     Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  👥  Total users       : $total"                  -ForegroundColor White
