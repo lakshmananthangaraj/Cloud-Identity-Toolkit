@@ -396,12 +396,12 @@ Function Remove-AzureRBACAssignments
 
             $found = @()
             try {
-                $found = Get-AzRoleAssignment -SignInName $row.SignInName -Scope $row.Scope -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.RoleDefinitionName -eq $row.RoleDefinitionName }
+                $found = Get-AzRoleAssignment -SignInName $row.SignInName -Scope $row.Scope -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.RoleDefinitionName -eq $row.RoleDefinitionName -and $_.Scope -eq $row.Scope }
             } catch {
                 $found = @()
             }
 
-            if (-not $found -or $found.Count -eq 0) {
+            if (-not $found -or @($found).Count -eq 0) {
                 $result.Status = "NotFound"
                 $result.Message = "No matching assignment found"
                 $result.ResultCode = "NOT-FOUND"
@@ -417,11 +417,11 @@ Function Remove-AzureRBACAssignments
                 if ($WhatIf) {
                     $rCopy = $result.PSObject.Copy()
                     $rCopy.Status = "WhatIf"
-                    $rCopy.Message = "Would remove RoleAssignmentId: $($ra.Id)"
+                    $rCopy.Message = "Would remove RoleAssignmentId: $($ra.RoleAssignmentId)"
                     $rCopy.ResultCode = "WHATIF"
                     $results.Add($rCopy)
-                    Write-Host ("    [{0}/{1}] WhatIf: Would remove assignment Id {2} for {3} - {4}" -f $i,$total,$ra.Id,$row.SignInName,$ra.RoleDefinitionName) -ForegroundColor Cyan
-                    Write-Log -Message "WHATIF: Found assignment Id $($ra.Id) for $($row.SignInName)" -Tag "INFO"
+                    Write-Host ("    [{0}/{1}] WhatIf: Would remove assignment Id {2} for {3} - {4}" -f $i,$total,$ra.RoleAssignmentId,$row.SignInName,$ra.RoleDefinitionName) -ForegroundColor Cyan
+                    Write-Log -Message "WHATIF: Found assignment Id $($ra.RoleAssignmentId) for $($row.SignInName)" -Tag "INFO"
                     $removedAny = $true
                     continue
                 }
@@ -430,20 +430,20 @@ Function Remove-AzureRBACAssignments
                     Remove-AzRoleAssignment -ObjectId $ra.ObjectId -RoleDefinitionName $ra.RoleDefinitionName -Scope $ra.Scope -Confirm:$false -ErrorAction Stop -WarningAction SilentlyContinue
                     $rCopy = $result.PSObject.Copy()
                     $rCopy.Status = "Removed"
-                    $rCopy.Message = "Removed RoleAssignmentId: $($ra.Id)"
+                    $rCopy.Message = "Removed RoleAssignmentId: $($ra.RoleAssignmentId)"
                     $rCopy.ResultCode = "REMOVED"
                     $results.Add($rCopy)
                     Write-Host ("    [{0}/{1}] Removed: {2} - {3} @ {4}" -f $i,$total,$row.SignInName,$ra.RoleDefinitionName,$ra.Scope) -ForegroundColor Green
-                    Write-Log -Message "Removed $($row.SignInName) - $($ra.RoleDefinitionName) at $($ra.Scope) (Id: $($ra.Id))" -Tag "SUCCESS"
+                    Write-Log -Message "Removed $($row.SignInName) - $($ra.RoleDefinitionName) at $($ra.Scope) (Id: $($ra.RoleAssignmentId))" -Tag "SUCCESS"
                     $removedAny = $true
                 } catch {
                     $rCopy = $result.PSObject.Copy()
                     $rCopy.Status = "Error"
-                    $rCopy.Message = "Failed to remove RoleAssignmentId $($ra.Id): $($_.Exception.Message)"
+                    $rCopy.Message = "Failed to remove RoleAssignmentId $($ra.RoleAssignmentId): $($_.Exception.Message)"
                     $rCopy.ResultCode = "ERR-REMOVE"
                     $results.Add($rCopy)
-                    Write-Host ("    [{0}/{1}] Error removing assignment Id {2}: {3}" -f $i,$total,$ra.Id,$_.Exception.Message) -ForegroundColor Red
-                    Write-Log -Message "Failed to remove assignment Id $($ra.Id) for $($row.SignInName): $($_.Exception.Message)" -Tag "ERROR"
+                    Write-Host ("    [{0}/{1}] Error removing assignment Id {2}: {3}" -f $i,$total,$ra.RoleAssignmentId,$_.Exception.Message) -ForegroundColor Red
+                    Write-Log -Message "Failed to remove assignment Id $($ra.RoleAssignmentId) for $($row.SignInName): $($_.Exception.Message)" -Tag "ERROR"
                 }
             }
 
@@ -484,12 +484,12 @@ Function Remove-AzureRBACAssignments
     }
 
     # Compute insights
-    $totalProcessed = $results.Count
-    $removedCount = ($results | Where-Object { $_.ResultCode -eq 'REMOVED' }).Count
-    $whatIfCount = ($results | Where-Object { $_.ResultCode -eq 'WHATIF' }).Count
-    $notFound = ($results | Where-Object { $_.ResultCode -eq 'NOT-FOUND' }).Count
-    $skipped = ($results | Where-Object { $_.ResultCode -like 'SKIPPED*' }).Count
-    $errors = ($results | Where-Object { $_.ResultCode -like 'ERR*' }).Count
+    $totalProcessed = @($results).Count
+    $removedCount = @($results | Where-Object { $_.ResultCode -eq 'REMOVED' }).Count
+    $whatIfCount = @($results | Where-Object { $_.ResultCode -eq 'WHATIF' }).Count
+    $notFound = @($results | Where-Object { $_.ResultCode -eq 'NOT-FOUND' }).Count
+    $skipped = @($results | Where-Object { $_.ResultCode -like 'SKIPPED*' }).Count
+    $errors = @($results | Where-Object { $_.ResultCode -like 'ERR*' }).Count
 
     Write-HostLog "" -Color White
     Write-HostLog $bannerLine -Color Cyan
