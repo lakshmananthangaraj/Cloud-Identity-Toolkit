@@ -1,9 +1,9 @@
 <#
 
 Author       : Lakshmanan Thangaraj
-Version      : 1.0
+Version      : 1.1
 Created-On   : 31 October 2025
-Modified-On  : 31 October 2025
+Modified-On  : 07 August 2026
 
 .SYNOPSIS
     Removes Azure RBAC role assignments for principals (users, groups, service principals,
@@ -21,6 +21,14 @@ Modified-On  : 31 October 2025
     • Validates that the input CSV contains all required columns before processing any rows.
     • Switches Azure subscription context per row so multi-subscription reports are handled
       correctly.
+    • Supports all principal ObjectTypes present in the CSV: User, ServicePrincipal, Group,
+      and Unknown. User rows are matched by SignInName (UPN) as before. ServicePrincipal,
+      Group, and Unknown rows are matched by Scope + RoleDefinitionName + ObjectType, then
+      narrowed by DisplayName when it is populated in the CSV.
+    • Rows missing or containing an unrecognized ObjectType are skipped (SKIPPED-INVALID-OBJECTTYPE).
+    • If a ServicePrincipal/Group/Unknown row has no DisplayName in the CSV and more than one
+      candidate assignment matches on Scope + RoleDefinitionName + ObjectType, the row is marked
+      Ambiguous and skipped rather than guessing which assignment to remove.
     • Validates each assignment is still live before attempting removal. Already-removed or
       never-present assignments are logged as skipped — not as errors.
     • Supports -WhatIf. In WhatIf mode the script confirms whether the assignment currently
@@ -34,6 +42,8 @@ Modified-On  : 31 October 2025
     Full path to the CSV file containing RBAC assignment rows to remove. The file must
     exist and must contain the columns: SubscriptionName, SubscriptionId, TenantId,
     DisplayName, SignInName, ObjectType, RoleDefinitionName, Scope.
+
+    ObjectType must be one of: User, ServicePrincipal, Group, Unknown.
 
 .PARAMETER SummaryCsvPath
     Optional path for the summary CSV output file. When omitted, a timestamped file is
@@ -95,6 +105,14 @@ Modified-On  : 31 October 2025
                         and service principal scenarios. Includes -WhatIf dry-run,
                         unified console/log output, pre-requisite and authentication
                         checks, and summary CSV reporting.
+    1.1 (07-Aug-2026) - Extended to process all ObjectTypes (User, ServicePrincipal,
+                        Group, Unknown) instead of skipping everything but User.
+                        User rows are still matched by SignInName. Non-User rows are
+                        matched by Scope + RoleDefinitionName + ObjectType, narrowed
+                        by DisplayName when available. Added an Ambiguous safeguard
+                        that skips (rather than guesses at) non-User rows with no
+                        DisplayName and multiple candidate matches. Core validation,
+                        removal, -WhatIf, logging, and summary logic unchanged.
 
     ─────────────────────────────────────────────────────────────────────────────
     Pre-Requisites:
@@ -108,6 +126,10 @@ Modified-On  : 31 October 2025
        context is found.
     5. Input CSV must contain the columns: SubscriptionName, SubscriptionId, TenantId,
        DisplayName, SignInName, ObjectType, RoleDefinitionName, Scope.
+    6. For ServicePrincipal/Group/Unknown rows, populate DisplayName in the CSV whenever
+       possible. It is used to disambiguate between multiple assignments that share the
+       same Scope + RoleDefinitionName + ObjectType. Rows without it that resolve to more
+       than one candidate are skipped as Ambiguous rather than removed.
 
     ─────────────────────────────────────────────────────────────────────────────
     Known Limitations:
@@ -119,6 +141,9 @@ Modified-On  : 31 October 2025
       CSVs into per-subscription batches for faster, parallel-friendly runs.
     - Management-Group-scoped assignments require the executing identity to hold the
       appropriate permissions at that scope; subscription-level Owner is not sufficient.
+    - ServicePrincipal/Group/Unknown rows with a blank DisplayName can only be uniquely
+      resolved when exactly one assignment matches Scope + RoleDefinitionName + ObjectType.
+      Otherwise the row is skipped as Ambiguous to avoid removing the wrong assignment.
 
 .LINK
     https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/Azure/RBAC/Get-AzureRBACAssignments.ps1
@@ -268,7 +293,7 @@ Function Remove-AzureRBACAssignments
 
     Write-HostLog "" -Color White
     Write-HostLog $bannerLine -Color Cyan
-    Write-HostLog "                         AZURE RBAC USER ASSIGNMENT REMOVER" -Color Green
+    Write-HostLog "                         AZURE RBAC ASSIGNMENT REMOVER - v1.1          " -Color Green
     Write-HostLog $bannerLine -Color Cyan
     Write-HostLog "" -Color White
 
@@ -344,6 +369,7 @@ Function Remove-AzureRBACAssignments
     $results = New-Object System.Collections.Generic.List[PSObject]
     $total = $assignments.Count
     $i = 0
+    $validObjectTypes = @('user','serviceprincipal','group','unknown')
 
     foreach ($row in $assignments) {
         $i++
@@ -371,10 +397,13 @@ Function Remove-AzureRBACAssignments
         Write-Log -Message "Processing user [$($row.SignInName)] in subscription [$($row.SubscriptionName)] with role [$($row.RoleDefinitionName)]" -Tag "INFO"
 
         try {
-            if (($null -eq $row.ObjectType) -or ($row.ObjectType.Trim().ToLower() -ne 'user')) {
+            # Accept any recognized ObjectType (User, ServicePrincipal, Group, Unknown).
+            # Only rows with a missing/unrecognized ObjectType are skipped.
+            $objType = if ($row.ObjectType) { $row.ObjectType.Trim() } else { $null }
+            if (($null -eq $objType) -or ($objType -eq '') -or ($validObjectTypes -notcontains $objType.ToLower())) {
                 $result.Status = "Skipped"
-                $result.Message = "ObjectType is not 'User'"
-                $result.ResultCode = "SKIPPED-NOT-USER"
+                $result.Message = "ObjectType is missing or not a recognized value (User/ServicePrincipal/Group/Unknown)"
+                $result.ResultCode = "SKIPPED-INVALID-OBJECTTYPE"
                 $results.Add($result)
                 Write-Host ("    [{0}/{1}] Skipped: {2} (ObjectType: {3})" -f $i,$total,$row.SignInName,$row.ObjectType) -ForegroundColor Yellow
                 Write-Log -Message "Skipped $($row.SignInName) - ObjectType $($row.ObjectType)" -Tag "WARNING"
@@ -396,7 +425,24 @@ Function Remove-AzureRBACAssignments
 
             $found = @()
             try {
-                $found = Get-AzRoleAssignment -SignInName $row.SignInName -Scope $row.Scope -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.RoleDefinitionName -eq $row.RoleDefinitionName -and $_.Scope -eq $row.Scope }
+                if ($objType.ToLower() -eq 'user') {
+                    # Unchanged behaviour for User principals: lookup by SignInName (UPN).
+                    $found = Get-AzRoleAssignment -SignInName $row.SignInName -Scope $row.Scope -ErrorAction SilentlyContinue -WarningAction SilentlyContinue |
+                        Where-Object { $_.RoleDefinitionName -eq $row.RoleDefinitionName -and $_.Scope -eq $row.Scope }
+                }
+                else {
+                    # Group / ServicePrincipal / Unknown principals don't have a resolvable
+                    # SignInName. Match on Scope + RoleDefinitionName + ObjectType instead,
+                    # then narrow by DisplayName when the CSV has one.
+                    $candidates = Get-AzRoleAssignment -Scope $row.Scope -ErrorAction SilentlyContinue -WarningAction SilentlyContinue |
+                        Where-Object { $_.RoleDefinitionName -eq $row.RoleDefinitionName -and $_.Scope -eq $row.Scope -and $_.ObjectType -eq $row.ObjectType }
+
+                    if ($row.DisplayName) {
+                        $found = $candidates | Where-Object { $_.DisplayName -and ($_.DisplayName.Trim().ToLower() -eq $row.DisplayName.Trim().ToLower()) }
+                    } else {
+                        $found = $candidates
+                    }
+                }
             } catch {
                 $found = @()
             }
@@ -408,6 +454,18 @@ Function Remove-AzureRBACAssignments
                 $results.Add($result)
                 Write-Host ("    [{0}/{1}] NotFound: {2} - {3} @ {4}" -f $i,$total,$row.SignInName,$row.RoleDefinitionName,$row.Scope) -ForegroundColor DarkYellow
                 Write-Log -Message "No matching assignment for $($row.SignInName) - $($row.RoleDefinitionName) at $($row.Scope)" -Tag "WARNING"
+                continue
+            }
+
+            # Safety guard: for non-User rows with no DisplayName to disambiguate, never
+            # guess which of several matching assignments to remove.
+            if (($objType.ToLower() -ne 'user') -and (-not $row.DisplayName) -and (@($found).Count -gt 1)) {
+                $result.Status = "Ambiguous"
+                $result.Message = "Multiple matching assignments found for this Scope/RoleDefinitionName/ObjectType and DisplayName is empty in the CSV - cannot safely determine which to remove."
+                $result.ResultCode = "AMBIGUOUS-MULTIPLE-MATCHES"
+                $results.Add($result)
+                Write-Host ("    [{0}/{1}] Ambiguous: {2} matches found for {3} @ {4} (ObjectType: {5}) - DisplayName empty, skipping" -f $i,$total,@($found).Count,$row.RoleDefinitionName,$row.Scope,$row.ObjectType) -ForegroundColor Red
+                Write-Log -Message "Ambiguous match ($(@($found).Count) results) for ObjectType $($row.ObjectType) at $($row.Scope)/$($row.RoleDefinitionName) - DisplayName empty in CSV. Skipped to avoid removing the wrong assignment." -Tag "WARNING"
                 continue
             }
 
@@ -488,6 +546,7 @@ Function Remove-AzureRBACAssignments
     $removedCount = @($results | Where-Object { $_.ResultCode -eq 'REMOVED' }).Count
     $whatIfCount = @($results | Where-Object { $_.ResultCode -eq 'WHATIF' }).Count
     $notFound = @($results | Where-Object { $_.ResultCode -eq 'NOT-FOUND' }).Count
+    $ambiguous = @($results | Where-Object { $_.ResultCode -eq 'AMBIGUOUS-MULTIPLE-MATCHES' }).Count
     $skipped = @($results | Where-Object { $_.ResultCode -like 'SKIPPED*' }).Count
     $errors = @($results | Where-Object { $_.ResultCode -like 'ERR*' }).Count
 
@@ -504,6 +563,7 @@ Function Remove-AzureRBACAssignments
     Write-HostLog ("Removed    : {0}" -f $removedCount) -Color Green
     Write-HostLog ("WhatIf     : {0}" -f $whatIfCount) -Color Cyan
     Write-HostLog ("NotFound   : {0}" -f $notFound) -Color Yellow
+    Write-HostLog ("Ambiguous  : {0}" -f $ambiguous) -Color Red
     Write-HostLog ("Skipped    : {0}" -f $skipped) -Color Yellow
     Write-HostLog ("Errors     : {0}" -f $errors) -Color Red
 
