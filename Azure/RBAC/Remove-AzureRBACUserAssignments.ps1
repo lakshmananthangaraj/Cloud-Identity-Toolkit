@@ -103,40 +103,40 @@
     Restore-AzureRBACUserAssignments -BackupJsonPath "C:\Temp\AzureRBACRemoval-Backup-20260807-143022.json"
 
 .NOTES
-─────────────────────────────────────────────────────────────────────────────
-Version History:
-─────────────────────────────────────────────────────────────────────────────
-1.0 (07-Aug-2026) - Initial release. Supports single UPN, multi-UPN, and bulk
-                    CSV input modes. Full audit logging, pre-removal JSON/CSV
-                    backup, HTML summary report, WhatIf/Force/ShouldProcess
-                    support, and companion Restore function.
+    ─────────────────────────────────────────────────────────────────────────────
+    Version History:
+    ─────────────────────────────────────────────────────────────────────────────
+    1.0 (07-Aug-2026) - Initial release. Supports single UPN, multi-UPN, and bulk
+                        CSV input modes. Full audit logging, pre-removal JSON/CSV
+                        backup, HTML summary report, WhatIf/Force/ShouldProcess
+                        support, and companion Restore function.
 
-─────────────────────────────────────────────────────────────────────────────
-Pre-Requisites:
-─────────────────────────────────────────────────────────────────────────────
-1. Az PowerShell module (Az.Accounts, Az.Resources) — installed automatically
-   with user consent if missing.
-2. Authenticated Azure session — the script will call Connect-AzAccount if no
-   active context is detected.
-3. The executing account must have 'Microsoft.Authorization/roleAssignments/read'
-   AND 'Microsoft.Authorization/roleAssignments/delete' permissions on each target
-   subscription (typically: User Access Administrator or Owner role).
-4. PowerShell 5.1 or later. No PS7-specific syntax is used.
+    ─────────────────────────────────────────────────────────────────────────────
+    Pre-Requisites:
+    ─────────────────────────────────────────────────────────────────────────────
+    1. Az PowerShell module (Az.Accounts, Az.Resources) — installed automatically
+    with user consent if missing.
+    2. Authenticated Azure session — the script will call Connect-AzAccount if no
+    active context is detected.
+    3. The executing account must have 'Microsoft.Authorization/roleAssignments/read'
+    AND 'Microsoft.Authorization/roleAssignments/delete' permissions on each target
+    subscription (typically: User Access Administrator or Owner role).
+    4. PowerShell 5.1 or later. No PS7-specific syntax is used.
 
-─────────────────────────────────────────────────────────────────────────────
-Known Limitations:
-─────────────────────────────────────────────────────────────────────────────
-- Only removes User-type principal assignments. Group and Service Principal
-  assignments are intentionally skipped and logged as informational notices.
-- Management Group scoped assignments are not in scope; they require elevated
-  permissions and a separate API call. A warning is logged if detected.
-- Default -OutputPath (C:\Temp) is a Windows-specific path. On macOS/Linux
-  PowerShell 7, supply an explicit -OutputPath value.
-- The -Scope parameter applies uniformly to all UPNs supplied via
-  -UserPrincipalName. For per-user scope control, use -BulkCsvPath with a
-  Scope column.
-- Interactive Grid View for the results preview requires a GUI-capable session.
-  In headless/CI/Linux environments this step is skipped gracefully.
+    ─────────────────────────────────────────────────────────────────────────────
+    Known Limitations:
+    ─────────────────────────────────────────────────────────────────────────────
+    - Only removes User-type principal assignments. Group and Service Principal
+    assignments are intentionally skipped and logged as informational notices.
+    - Management Group scoped assignments are not in scope; they require elevated
+    permissions and a separate API call. A warning is logged if detected.
+    - Default -OutputPath (C:\Temp) is a Windows-specific path. On macOS/Linux
+    PowerShell 7, supply an explicit -OutputPath value.
+    - The -Scope parameter applies uniformly to all UPNs supplied via
+    -UserPrincipalName. For per-user scope control, use -BulkCsvPath with a
+    Scope column.
+    - Interactive Grid View for the results preview requires a GUI-capable session.
+    In headless/CI/Linux environments this step is skipped gracefully.
 
 .LINK
     https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-remove
