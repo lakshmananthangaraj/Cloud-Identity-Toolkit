@@ -90,49 +90,54 @@ Modified-On  : 11 August 2026
     Runs with a conservative batch size suitable for tenants with aggressive throttling.
 
 .NOTES
-─────────────────────────────────────────────────────────────────────────────
-Version History:
-─────────────────────────────────────────────────────────────────────────────
-1.0 (11-Aug-2026) - Initial release
+    ─────────────────────────────────────────────────────────────────────────────
+    Version History:
+    ─────────────────────────────────────────────────────────────────────────────
+    1.0 (11-Aug-2026) - Initial release
 
-─────────────────────────────────────────────────────────────────────────────
-Pre-Requisites:
-─────────────────────────────────────────────────────────────────────────────
-1. PowerShell 5.1 or later
-2. A valid Microsoft Graph Bearer token with the permissions listed under .PARAMETER AccessToken
-3. The token must be for a user/service principal with Teams read access across the tenant
-4. For policy coverage (DLP/Retention): token requires Compliance centre read scopes —
-   InformationProtectionPolicy.Read, DataLossPreventionPolicy.Evaluate
+    ─────────────────────────────────────────────────────────────────────────────
+    Pre-Requisites:
+    ─────────────────────────────────────────────────────────────────────────────
+    1. PowerShell 5.1 or later
+    2. A valid Microsoft Graph Bearer token with the permissions listed under .PARAMETER AccessToken
+    3. The token must be for a user/service principal with Teams read access across the tenant
+    4. For policy coverage (DLP/Retention): token requires Compliance centre read scopes —
+       InformationProtectionPolicy.Read, DataLossPreventionPolicy.Evaluate
 
-─────────────────────────────────────────────────────────────────────────────
-Known Limitations:
-─────────────────────────────────────────────────────────────────────────────
-- Trend data (sparklines) are populated with synthetic placeholder values in v1.0.
-  Implement a weekly scheduled task that appends snapshot JSON to a history file
-  and pass -TrendDataPath to unlock real trend lines in a future version.
-- Policy coverage for DLP and Retention requires Compliance centre API permissions
-  that may not be available with basic Graph scopes; the script degrades gracefully
-  by reporting "Unavailable" rather than failing.
-- In tenants with > 2,000 teams, initial data collection may take 3–5 minutes.
-  Use -BatchSize 2 if 429 throttling is observed.
-- lastActivityDateTime from the Groups Usage Reports API requires Reports.Read.All;
-  if absent, activity classification falls back to group creation date.
+    ─────────────────────────────────────────────────────────────────────────────
+    Known Limitations:
+    ─────────────────────────────────────────────────────────────────────────────
+    - Trend data (sparklines) are populated with synthetic placeholder values in v1.0.
+      Implement a weekly scheduled task that appends snapshot JSON to a history file
+      and pass -TrendDataPath to unlock real trend lines in a future version.
+    - Policy coverage for DLP and Retention requires Compliance centre API permissions
+      that may not be available with basic Graph scopes; the script degrades gracefully
+      by reporting "Unavailable" rather than failing.
+    - In tenants with > 2,000 teams, initial data collection may take 3–5 minutes.
+      Use -BatchSize 2 if 429 throttling is observed.
+    - lastActivityDateTime from the Groups Usage Reports API requires Reports.Read.All;
+      if absent, activity classification falls back to group creation date.
 
 .LINK
     https://learn.microsoft.com/en-us/graph/api/group-list?view=graph-rest-1.0
+
 .LINK
     https://learn.microsoft.com/en-us/graph/api/team-get?view=graph-rest-1.0
+
 .LINK
     https://learn.microsoft.com/en-us/graph/api/team-list-members?view=graph-rest-1.0
+
 .LINK
     https://learn.microsoft.com/en-us/microsoftteams/information-barriers-teams
+
 .LINK
     https://learn.microsoft.com/en-us/microsoft-365/compliance/dlp-teams-default-policy
 
 #>
 
 
-Function Generate-TeamExecutiveDashboard {
+Function Generate-TeamExecutiveDashboard
+{
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
@@ -160,8 +165,8 @@ Function Generate-TeamExecutiveDashboard {
         Clear-Host
         Write-Host ""
         Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║   🏢  Teams Executive Dashboard Generator  v1.0             ║" -ForegroundColor Cyan
-        Write-Host "  ║   Microsoft 365 · Graph API · KPI Intelligence              ║" -ForegroundColor Cyan
+        Write-Host "  ║      🏢 Teams Executive Dashboard Generator  v1.0            ║" -ForegroundColor Cyan
+        Write-Host "  ║       Microsoft 365 · Graph API · KPI Intelligence           ║" -ForegroundColor Cyan
         Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host ""
     }
@@ -188,7 +193,7 @@ Function Generate-TeamExecutiveDashboard {
 
     #region ── Graph API Helpers ──────────────────────────────────────────────────
 
-    function Invoke-GraphRequest {
+    function Invoke-GraphApiRequest {
         param(
             [string]$Uri,
             [string]$Token,
@@ -234,11 +239,16 @@ Function Generate-TeamExecutiveDashboard {
         $nextUri = $Uri
 
         while ($nextUri) {
-            $page = Invoke-GraphRequest -Uri $nextUri -Token $Token
+            $page = Invoke-GraphApiRequest -Uri $nextUri -Token $Token
             if ($null -eq $page) { break }
 
             if ($page.value) { $results.AddRange($page.value) }
-            $nextUri = $page.'@odata.nextLink'
+            
+            $nextUri = if ($page.PSObject.Properties.Name -contains '@odata.nextLink') {
+                $page.'@odata.nextLink'
+            } else {
+                $null
+            }
         }
 
         return $results
@@ -306,7 +316,7 @@ Function Generate-TeamExecutiveDashboard {
         param([string]$TeamId, [string]$Token)
 
         $uri = "https://graph.microsoft.com/v1.0/teams/$TeamId`?`$select=id,isArchived,guestSettings,memberSettings,messagingSettings,funSettings,discoverySettings"
-        $result = Invoke-GraphRequest -Uri $uri -Token $Token
+        $result = Invoke-GraphApiRequest -Uri $uri -Token $Token
         return $result
     }
 
@@ -314,7 +324,7 @@ Function Generate-TeamExecutiveDashboard {
         param([string]$GroupId, [string]$Token)
 
         $uri = "https://graph.microsoft.com/v1.0/groups/$GroupId`?`$select=assignedLabels"
-        $result = Invoke-GraphRequest -Uri $uri -Token $Token
+        $result = Invoke-GraphApiRequest -Uri $uri -Token $Token
         $labels = Get-SafeProp -Object $result -Property 'assignedLabels' -Default @()
         return ($labels.Count -gt 0)
     }
@@ -324,7 +334,7 @@ Function Generate-TeamExecutiveDashboard {
 
         # Try the M365 Groups usage report for last activity
         $uri = "https://graph.microsoft.com/v1.0/reports/getM365GroupsActivityDetail(period='D90')?`$filter=groupId eq '$GroupId'"
-        $result = Invoke-GraphRequest -Uri $uri -Token $Token
+        $result = Invoke-GraphApiRequest -Uri $uri -Token $Token
 
         if ($result -and $result.value -and $result.value[0].lastActivityDate) {
             try { return [datetime]$result.value[0].lastActivityDate } catch {}
@@ -336,13 +346,13 @@ Function Generate-TeamExecutiveDashboard {
         param([string]$Token)
 
         Write-Step "Collecting DLP policy assignments…"
-        $dlpUri = "https://graph.microsoft.com/v1.0/security/informationProtection/policies"
-        $dlpData = Invoke-GraphRequest -Uri $dlpUri -Token $Token
+        $dlpUri = "https://graph.microsoft.com/v1.0/security/dataSecurityAndGovernance/sensitivityLabels"
+        $dlpData = Invoke-GraphApiRequest -Uri $dlpUri -Token $Token
 
         Write-Step "Collecting Retention policy assignments…"
         # Retention via Compliance API (may require additional scope)
-        $retUri = "https://graph.microsoft.com/v1.0/security/dataSecurityAndGovernance/retentionPolicies"
-        $retData = Invoke-GraphRequest -Uri $retUri -Token $Token
+        $retUri = "https://graph.microsoft.com/beta/security/labels/retentionLabels"
+        $retData = Invoke-GraphApiRequest -Uri $retUri -Token $Token
 
         return [PSCustomObject]@{
             DlpAvailable       = ($null -ne $dlpData)
@@ -371,7 +381,7 @@ Function Generate-TeamExecutiveDashboard {
 
     # Validate token by calling /me or /organization
     Write-Step "Verifying token against /organization endpoint…"
-    $orgInfo = Invoke-GraphRequest -Uri "$graphBase/organization?`$select=displayName,id" -Token $AccessToken
+    $orgInfo = Invoke-GraphApiRequest -Uri "$graphBase/organization?`$select=displayName,id" -Token $AccessToken
     if ($null -eq $orgInfo) {
         Write-Step "Could not verify token — check permissions and expiry" "ERR"
         throw "Token verification failed."
