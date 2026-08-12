@@ -211,7 +211,7 @@ Function Get-AzureResourceTagInventory
     }
 
     # Display the subscription count
-    $subscriptionCount = $subscriptions.Count
+    $subscriptionCount = @($subscriptions).Count
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Total subscriptions being processed: $subscriptionCount" -ForegroundColor Green
 
     # Exit if no subscriptions were selected
@@ -266,7 +266,7 @@ Function Get-AzureResourceTagInventory
 
         # Process resource groups and their resources
         $resourceGroups = Get-AzResourceGroup -Id "/subscriptions/$($subscription.Id)/resourceGroups/*" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-        $resourceGroupCount = $resourceGroups.Count
+        $resourceGroupCount = @($resourceGroups).Count
         $processedResourceGroups = 0
 
         foreach ($rg in $resourceGroups)
@@ -303,7 +303,7 @@ Function Get-AzureResourceTagInventory
 
             # Process each resource in the resource group
             $resources = Get-AzResource -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-            $resourceCount = $resources.Count
+            $resourceCount = @($resources).Count
             $processedResources = 0
 
             foreach ($resource in $resources)
