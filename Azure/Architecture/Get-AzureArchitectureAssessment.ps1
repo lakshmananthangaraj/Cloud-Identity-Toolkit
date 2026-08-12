@@ -2145,7 +2145,7 @@ Function Get-AzureArchitectureAssessment
     Write-ArchBanner
 
     # Ensure required modules
-    # if (-not (Ensure-ArchModules)) { return }
+    if (-not (Ensure-ArchModules)) { return }
 
     # Authenticate if needed
     $currentContext = Get-AzContext -ErrorAction SilentlyContinue
