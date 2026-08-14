@@ -1,9 +1,9 @@
 <#
 
 Author          : Lakshmanan Thangaraj
-Version         : 1.0
+Version         : 1.1
 Created-On      : 12 August 2026
-Modified-On     : 12 August 2026
+Modified-On     : 14 August 2026
 
 .SYNOPSIS
     Identifies Azure Policy coverage gaps against a Management-Group-defined
@@ -86,23 +86,91 @@ Modified-On     : 12 August 2026
 .EXAMPLE
     Get-AzurePolicyCoverageGap -BaselineManagementGroupId "mg-enterprise-baseline"
 
+    LARGE ENTERPRISE — Management Group mode. Resolves all subscriptions beneath
+    the specified Management Group, uses assignments created directly at that MG
+    as the baseline, and reports Assignment Gaps (NotScopes exclusions) and
+    Compliance Gaps (non-compliant resources) across all in-scope subscriptions.
+
 .EXAMPLE
     Get-AzurePolicyCoverageGap -BaselineManagementGroupId "mg-enterprise-baseline" -SubscriptionIds @("SubscriptionID1", "SubscriptionID2")
+
+    LARGE ENTERPRISE — Management Group mode, scoped to specific subscriptions.
+    Only the supplied subscription IDs are scanned; any ID not found beneath the
+    Management Group tree is skipped with a warning. Useful for targeting a
+    single landing zone or a subset of subscriptions in a large tenant without
+    running a full tenant-wide scan.
 
 .EXAMPLE
     Get-AzurePolicyCoverageGap -BaselineManagementGroupId "mg-enterprise-baseline" -SkipResourceLevelCompliance
 
-    Reports Assignment Gaps only (Subscription/Resource Group level), skipping the resource-level Policy Insights compliance pull.
+    LARGE ENTERPRISE — Assignment Gap scan only. Skips the Policy Insights
+    resource-level compliance pull (Get-AzPolicyState) and reports only
+    Subscription and Resource Group level NotScopes exclusions. Use this for a
+    fast structural audit in very large tenants where a full resource-level
+    compliance pull is impractical in a single run.
 
 .EXAMPLE
-    Get-AzurePolicyCoverageGap -BaselineManagementGroupId "mg-enterprise-baseline" -ExportToCsv -CsvPath "C:\Path\To\Output.csv"
+    Get-AzurePolicyCoverageGap -BaselineManagementGroupId "mg-enterprise-baseline" -ExportToCsv -CsvPath "C:\Reports\PolicyGaps.csv"
 
+    LARGE ENTERPRISE — Full scan with CSV and HTML output. Exports all gap rows
+    (Assignment Gaps and Compliance Gaps) to the specified CSV path, and always
+    generates a self-contained HTML report at the same path with a .html
+    extension. Results are also displayed in an interactive Grid View where a
+    GUI is available.
+
+.EXAMPLE
+    Get-AzurePolicyCoverageGap -SubscriptionMode
+
+    SMALL / TEST ENVIRONMENT — No Management Group required. Scans all
+    subscriptions visible to the authenticated account. Baseline is derived from
+    all policy assignments visible at the first accessible subscription. Use this
+    in dev/test tenants, Visual Studio subscriptions, or any environment where
+    Management Groups have not been configured.
+
+.EXAMPLE
+    Get-AzurePolicyCoverageGap -SubscriptionMode -SkipResourceLevelCompliance
+
+    SMALL / TEST ENVIRONMENT — Assignment Gap scan only, no Management Group
+    required. Fastest execution path: enumerates NotScopes exclusions at
+    Subscription and Resource Group level only, with no Policy Insights calls.
+    Ideal for a quick structural check in a test environment.
+
+.EXAMPLE
+    Get-AzurePolicyCoverageGap -SubscriptionIds @("SubscriptionID1", "SubscriptionID2")
+
+    MID-SIZE — Targeted subscription scan, no Management Group required.
+    Scans only the specified subscription IDs. Baseline is derived from policy
+    assignments visible at the first supplied subscription. Any subscription ID
+    not accessible to the authenticated account is skipped with a warning.
+    Suitable for organizations using subscriptions without Management Group
+    hierarchy, or for targeting a specific workload boundary.
+
+.EXAMPLE
+    Get-AzurePolicyCoverageGap -SubscriptionIds @("SubscriptionID1") -ExportToCsv -CsvPath "C:\Reports\PolicyGaps.csv"
+
+    MID-SIZE — Targeted subscription scan with CSV and HTML export. Combines
+    the targeted -SubscriptionIds scope with full output: CSV export of all gap
+    rows plus a self-contained HTML report. Use this for a repeatable, auditable
+    point-in-time snapshot of a specific workload or team boundary.
+    
 .NOTES
-    ─────────────────────────────────────────────────────────────────────────────
+─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
         1.0 (12-Aug-2026) - Initial release
-
+        1.1 (14-Aug-2026) - Defensive flat-object compatibility for
+                            Get-AzPolicyAssignment and Get-AzPolicyDefinition /
+                            Get-AzPolicySetDefinition. Newer Az.Resources module
+                            versions return flat PSCustomObject shapes without a
+                            nested .Properties child, causing PropertyNotFoundException
+                            on .ResourceId, .NotScopes, and .Properties.DisplayName.
+                            All property reads now use try/catch guards that check
+                            the flat property first, making the script compatible
+                            across Az module versions 6.x through 13.x.
+                            Added -SubscriptionMode switch and optional
+                            -BaselineManagementGroupId for test and small-environment
+                            compatibility (no Management Group required).
+                            
     ─────────────────────────────────────────────────────────────────────────────
     Pre-Requisites:
     ─────────────────────────────────────────────────────────────────────────────
@@ -157,11 +225,14 @@ Modified-On     : 12 August 2026
             Get-AzPolicyState results are attributed to the initiative
             assignment as a whole.
         - Az module cmdlet output shapes for policy assignments (NotScopes,
-            PolicyDefinitionId, ResourceId/Id) have varied slightly across Az
-            module versions. This script defensively checks multiple property
-            names, but if your installed Az version differs significantly,
-            validate against Get-Member before relying on results in
-            production.
+            PolicyDefinitionId, ResourceId/Id) have varied across Az module
+            versions. Versions 6.x and earlier nest these under .Properties;
+            versions 9.x+ return flat objects. This script uses try/catch
+            guards on all property reads and checks the flat property first,
+            providing compatibility across Az 6.x through 13.x. If unexpected
+            "Could not be confirmed" values appear, run:
+            (Get-AzPolicyAssignment)[0] | Get-Member -MemberType Properties
+            to inspect the actual shape returned by your installed version.
         - RESOURCE-LEVEL COMPLIANCE SCAN COST: Get-AzPolicyState at Subscription
             scope can return a large result set in big enterprise tenants. Use
             -SkipResourceLevelCompliance or -SubscriptionIds to scope down a
@@ -430,11 +501,15 @@ Function Get-BaselinePolicyDisplayName {
     Try {
         if ($PolicyDefinitionId -match '/policySetDefinitions/') {
             $def = Get-AzPolicySetDefinition -Id $PolicyDefinitionId -ErrorAction Stop
-            $displayName = if ($def.Properties.DisplayName) { $def.Properties.DisplayName } else { $def.Name }
+            $dn = try { $def.DisplayName } catch { $null }
+            $dn = if ($dn) { $dn } else { try { $def.Properties.DisplayName } catch { $null } }
+            $displayName = if ($dn) { $dn } else { $def.Name }
         }
         else {
             $def = Get-AzPolicyDefinition -Id $PolicyDefinitionId -ErrorAction Stop
-            $displayName = if ($def.Properties.DisplayName) { $def.Properties.DisplayName } else { $def.Name }
+            $dn = try { $def.DisplayName } catch { $null }
+            $dn = if ($dn) { $dn } else { try { $def.Properties.DisplayName } catch { $null } }
+            $displayName = if ($dn) { $dn } else { $def.Name }
         }
     }
     Catch {
@@ -741,10 +816,12 @@ $outputFilesHtml
 
 Function Get-AzurePolicyCoverageGap {
     param (
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [string]$BaselineManagementGroupId,
 
         [string[]]$SubscriptionIds,
+
+        [switch]$SubscriptionMode,
 
         [switch]$ExportToCsv,
 
@@ -756,6 +833,21 @@ Function Get-AzurePolicyCoverageGap {
     $startTime = Get-Date
 
     Write-Banner
+
+    # ── Parameter validation ──────────────────────────────────────────────────
+    if (-not $BaselineManagementGroupId -and -not $SubscriptionMode -and -not $SubscriptionIds) {
+        Write-Host "  ✗ You must supply either -BaselineManagementGroupId, -SubscriptionMode, or -SubscriptionIds." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Examples:" -ForegroundColor Cyan
+        Write-Host "    # Enterprise (Management Group mode):" -ForegroundColor Gray
+        Write-Host "    Get-AzurePolicyCoverageGap -BaselineManagementGroupId 'mg-corp'" -ForegroundColor White
+        Write-Host "    # Test / small environment (Subscription mode, all visible subscriptions):" -ForegroundColor Gray
+        Write-Host "    Get-AzurePolicyCoverageGap -SubscriptionMode" -ForegroundColor White
+        Write-Host "    # Targeted (specific subscriptions, no Management Group required):" -ForegroundColor Gray
+        Write-Host "    Get-AzurePolicyCoverageGap -SubscriptionIds @('sub-id-1','sub-id-2')" -ForegroundColor White
+        Write-Host ""
+        return
+    }
 
     # Check for the specific Az sub-modules required (not the coarse Az umbrella module)
     $requiredModules = @("Az.Accounts", "Az.Resources", "Az.PolicyInsights")
@@ -818,66 +910,103 @@ Function Get-AzurePolicyCoverageGap {
         $currentContext = Get-AzContext
     }
 
-    # Resolve the baseline Management Group and its Subscription tree
-    Write-Host "  Resolving Management Group tree beneath '$BaselineManagementGroupId'..." -ForegroundColor Cyan
+    # ── Subscription resolution (Management Group mode OR Subscription mode) ──
+    if ($BaselineManagementGroupId) {
+        Write-Host "  Resolving Management Group tree beneath '$BaselineManagementGroupId'..." -ForegroundColor Cyan
+        try {
+            $baselineMg = Get-AzManagementGroup -GroupId $BaselineManagementGroupId -Expand -Recurse -ErrorAction Stop
+        }
+        catch {
+            Write-Host "  ✗ Failed to resolve Management Group '$BaselineManagementGroupId': $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+        $treeSubscriptionIds = Get-ChildSubscriptionIds -ManagementGroupNode $baselineMg
 
-    Try {
-        $baselineMg = Get-AzManagementGroup -GroupId $BaselineManagementGroupId -Expand -Recurse -ErrorAction Stop
-    }
-    Catch {
-        Write-Host "  ✗ Failed to resolve Management Group '$BaselineManagementGroupId': $($_.Exception.Message)" -ForegroundColor Red
-        return
-    }
-
-    $treeSubscriptionIds = Get-ChildSubscriptionIds -ManagementGroupNode $baselineMg
-
-    if ($SubscriptionIds) {
-        $inScopeSubscriptionIds = @($treeSubscriptionIds | Where-Object { $SubscriptionIds -contains $_ })
-        $notFound = @($SubscriptionIds | Where-Object { $treeSubscriptionIds -notcontains $_ })
-        if ($notFound.Count -gt 0) {
-            Write-Warning "The following -SubscriptionIds were not found beneath '$BaselineManagementGroupId' and will be skipped: $($notFound -join ', ')"
+        if ($SubscriptionIds) {
+            $inScopeSubscriptionIds = @($treeSubscriptionIds | Where-Object { $SubscriptionIds -contains $_ })
+            $notFound = @($SubscriptionIds | Where-Object { $treeSubscriptionIds -notcontains $_ })
+            if ($notFound.Count -gt 0) {
+                Write-Warning "The following -SubscriptionIds were not found beneath '$BaselineManagementGroupId' and will be skipped: $($notFound -join ', ')"
+            }
+        }
+        else {
+            $inScopeSubscriptionIds = $treeSubscriptionIds
         }
     }
     else {
-        $inScopeSubscriptionIds = $treeSubscriptionIds
+        # Subscription mode — no Management Group required
+        Write-Host "  Running in Subscription Mode (no Management Group required)..." -ForegroundColor Cyan
+        $allVisible = @(Get-AzSubscription -WarningAction SilentlyContinue)
+        if ($SubscriptionIds) {
+            $inScopeSubscriptionIds = @($allVisible | Where-Object { $SubscriptionIds -contains $_.Id } | Select-Object -ExpandProperty Id)
+            $notFound = @($SubscriptionIds | Where-Object { ($allVisible.Id) -notcontains $_ })
+            if ($notFound.Count -gt 0) {
+                Write-Warning "The following -SubscriptionIds were not found in your visible subscriptions and will be skipped: $($notFound -join ', ')"
+            }
+        }
+        else {
+            $inScopeSubscriptionIds = @($allVisible | Select-Object -ExpandProperty Id)
+        }
     }
 
     if ($inScopeSubscriptionIds.Count -eq 0) {
-        Write-Host "  ✗ No in-scope subscriptions were found beneath '$BaselineManagementGroupId'." -ForegroundColor Red
+        Write-Host "  ✗ No in-scope subscriptions found. Verify your account has Reader access to at least one subscription." -ForegroundColor Red
         return
     }
 
     # Resolve baseline requirements: assignments created DIRECTLY at the baseline Management Group
     Write-Host "  Resolving baseline policy/initiative assignments..." -ForegroundColor Cyan
 
-    $mgScope = "/providers/Microsoft.Management/managementGroups/$BaselineManagementGroupId"
-    $directAssignmentPrefix = "$mgScope/providers/Microsoft.Authorization/policyAssignments/"
+    if ($BaselineManagementGroupId) {
+        # Management Group mode — baseline = assignments directly at the MG scope
+        $mgScope = "/providers/Microsoft.Management/managementGroups/$BaselineManagementGroupId"
+        $directAssignmentPrefix = "$mgScope/providers/Microsoft.Authorization/policyAssignments/"
 
-    Try {
-        $allAssignmentsAtMg = Get-AzPolicyAssignment -Scope $mgScope -ErrorAction Stop
+        try {
+            $allAssignmentsAtMg = Get-AzPolicyAssignment -Scope $mgScope -ErrorAction Stop
+        }
+        catch {
+            Write-Host "  ✗ Failed to retrieve policy assignments at '$mgScope': $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+
+        $baselineAssignments = @($allAssignmentsAtMg | Where-Object {
+                $rid = if ($_.ResourceId) { $_.ResourceId } elseif ($_.Id) { $_.Id } else { "" }
+                $rid -like "$directAssignmentPrefix*"
+            })
+
+        if ($baselineAssignments.Count -eq 0) {
+            Write-Host "  ⚠ No policy/initiative assignments found directly at '$BaselineManagementGroupId'. Nothing to evaluate." -ForegroundColor Yellow
+            return
+        }
     }
-    Catch {
-        Write-Host "  ✗ Failed to retrieve policy assignments at '$mgScope': $($_.Exception.Message)" -ForegroundColor Red
-        return
-    }
+    else {
+        # Subscription mode — baseline = all assignments visible at the first in-scope subscription
+        # Uses the first subscription as a representative sample; covers tenant-level and sub-level assignments
+        Write-Host "  Resolving baseline assignments from subscription scope..." -ForegroundColor Cyan
+        $representativeSubId = $inScopeSubscriptionIds[0]
+        try {
+            Set-AzContext -Subscription $representativeSubId -WarningAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null
+            $baselineAssignments = @(Get-AzPolicyAssignment -ErrorAction Stop)
+        }
+        catch {
+            Write-Host "  ✗ Failed to retrieve policy assignments for subscription '$representativeSubId': $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
 
-    $baselineAssignments = @($allAssignmentsAtMg | Where-Object {
-            $assignmentResourceId = if ($_.ResourceId) { $_.ResourceId } elseif ($_.Id) { $_.Id } else { "" }
-            $assignmentResourceId -like "$directAssignmentPrefix*"
-        })
-
-    if ($baselineAssignments.Count -eq 0) {
-        Write-Host "  ⚠ No policy/initiative assignments found directly at '$BaselineManagementGroupId'. Nothing to evaluate." -ForegroundColor Yellow
-        return
+        if ($baselineAssignments.Count -eq 0) {
+            Write-Host "  ⚠ No policy assignments found. Assign at least one policy/initiative before running a coverage gap assessment." -ForegroundColor Yellow
+            return
+        }
     }
 
     # Resolve display names and NotScopes per baseline assignment
     $baselineRequirements = @()
     foreach ($assignment in $baselineAssignments) {
-        $assignmentResourceId = if ($assignment.ResourceId) { $assignment.ResourceId } elseif ($assignment.Id) { $assignment.Id } else { $null }
-        $policyDefinitionId = if ($assignment.PolicyDefinitionId) { $assignment.PolicyDefinitionId } elseif ($assignment.Properties.PolicyDefinitionId) { $assignment.Properties.PolicyDefinitionId } else { $null }
-        $notScopes = if ($assignment.NotScopes) { @($assignment.NotScopes) } elseif ($assignment.Properties.NotScopes) { @($assignment.Properties.NotScopes) } else { @() }
-        $displayName = if ($assignment.DisplayName) { $assignment.DisplayName } elseif ($assignment.Properties.DisplayName) { $assignment.Properties.DisplayName } else { $assignment.Name }
+        $assignmentResourceId = try { if ($assignment.ResourceId) { $assignment.ResourceId } elseif ($assignment.Id) { $assignment.Id } else { $null } } catch { $null }
+        $policyDefinitionId = try { if ($assignment.PolicyDefinitionId) { $assignment.PolicyDefinitionId } else { $null } } catch { $null }
+        $notScopes = try { if ($assignment.NotScopes) { @($assignment.NotScopes) } else { @() } } catch { @() }
+        $displayName = try { if ($assignment.DisplayName -and -not [string]::IsNullOrWhiteSpace($assignment.DisplayName)) { $assignment.DisplayName } elseif ($assignment.Name) { $assignment.Name } else { "Unknown" } } catch { "Unknown" }
 
         $baselineRequirements += [PSCustomObject]@{
             AssignmentId       = $assignmentResourceId
@@ -904,7 +1033,7 @@ Function Get-AzurePolicyCoverageGap {
     }
 
     $scanParameters = @{
-        BaselineManagementGroupId = $BaselineManagementGroupId
+        BaselineManagementGroupId = if ($BaselineManagementGroupId) { $BaselineManagementGroupId } else { "N/A — Subscription Mode" }
         BaselineRequirementCount  = $baselineRequirements.Count
         ResourceLevelScan         = if ($SkipResourceLevelCompliance.IsPresent) { "Skipped" } else { "Enabled" }
         ExportEnabled             = if ($ExportToCsv.IsPresent) { "Enabled" } else { "Disabled" }
@@ -917,7 +1046,7 @@ Function Get-AzurePolicyCoverageGap {
     }
 
     Write-Section -Title "Scan Parameters" -Data @{
-        "Baseline Management Group" = $BaselineManagementGroupId
+        "Baseline Management Group" = if ($BaselineManagementGroupId) { $BaselineManagementGroupId } else { "N/A — Subscription Mode" }
         "Baseline Requirements"     = $baselineRequirements.Count
         "Subscriptions In Scope"    = $subscriptionCount
         "Resource-Level Scan"       = if ($SkipResourceLevelCompliance.IsPresent) { "Skipped" } else { "Enabled" }
