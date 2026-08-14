@@ -132,280 +132,258 @@ Modified-On     : 13 August 2026
 
 #------------------------------------------------------------------------ [ Helper Functions ]
 
-Function Write-CenteredText
-{
-    param(
-        [string]$Text,
-        [int]$Width = 80,
-        [string]$Color = "White"
-    )
-    $padding = [math]::Max(0, ($Width - $Text.Length) / 2)
-    Write-Host (" " * $padding) -NoNewline
-    Write-Host $Text -ForegroundColor $Color
+Function Write-CenteredText {
+  param(
+    [string]$Text,
+    [int]$Width = 80,
+    [string]$Color = "White"
+  )
+  $padding = [math]::Max(0, ($Width - $Text.Length) / 2)
+  Write-Host (" " * $padding) -NoNewline
+  Write-Host $Text -ForegroundColor $Color
 }
 
-Function Write-Banner
-{
-    Clear-Host
-    Write-Host ""
-    Write-Host ("═" * 80) -ForegroundColor Cyan
-    Write-CenteredText "Azure Policy Governance Assessment v1.0" -Color White
-    Write-Host ("═" * 80) -ForegroundColor Cyan
-    Write-Host ""
+Function Write-Banner {
+  Clear-Host
+  Write-Host ""
+  Write-Host ("═" * 80) -ForegroundColor Cyan
+  Write-CenteredText "Azure Policy Governance Assessment v1.0" -Color White
+  Write-Host ("═" * 80) -ForegroundColor Cyan
+  Write-Host ""
 }
 
-Function Write-Section
-{
-    param(
-        [string]$Title,
-        [hashtable]$Data
-    )
+Function Write-Section {
+  param(
+    [string]$Title,
+    [hashtable]$Data
+  )
 
-    Write-Host ""
-    Write-Host "  $Title" -ForegroundColor Cyan
+  Write-Host ""
+  Write-Host "  $Title" -ForegroundColor Cyan
+  Write-Host "  " -NoNewline
+  Write-Host ("─" * 76) -ForegroundColor DarkGray
+
+  foreach ($key in $Data.Keys) {
+    $value = $Data[$key]
+    if ([string]::IsNullOrWhiteSpace($value)) {
+      $value = "None"
+      $valColor = "DarkGray"
+    }
+    else {
+      $valColor = "White"
+    }
+
     Write-Host "  " -NoNewline
-    Write-Host ("─" * 76) -ForegroundColor DarkGray
-
-    foreach ($key in $Data.Keys)
-    {
-        $value = $Data[$key]
-        if ([string]::IsNullOrWhiteSpace($value))
-        {
-            $value    = "None"
-            $valColor = "DarkGray"
-        }
-        else
-        {
-            $valColor = "White"
-        }
-
-        Write-Host "  " -NoNewline
-        Write-Host $key.PadRight(28) -NoNewline -ForegroundColor Gray
-        Write-Host ": " -NoNewline -ForegroundColor DarkGray
-        Write-Host $value -ForegroundColor $valColor
-    }
+    Write-Host $key.PadRight(28) -NoNewline -ForegroundColor Gray
+    Write-Host ": " -NoNewline -ForegroundColor DarkGray
+    Write-Host $value -ForegroundColor $valColor
+  }
 }
 
-Function Write-ScanProgress
-{
-    Write-Host ""
-    Write-Host "  Scanning Subscriptions" -ForegroundColor Cyan
+Function Write-ScanProgress {
+  Write-Host ""
+  Write-Host "  Scanning Subscriptions" -ForegroundColor Cyan
+  Write-Host "  " -NoNewline
+  Write-Host ("─" * 76) -ForegroundColor DarkGray
+  Write-Host ""
+}
+
+Function Write-ProgressBar {
+  param(
+    [int]$Current,
+    [int]$Total,
+    [string]$CurrentItem,
+    [int]$BarWidth = 40
+  )
+
+  $percentage = [math]::Round(($Current / [math]::Max($Total, 1)) * 100)
+  $completed = [math]::Floor($BarWidth * $Current / [math]::Max($Total, 1))
+  $remaining = $BarWidth - $completed
+  $bar = ("█" * $completed) + ("░" * $remaining)
+
+  Write-Host "`r" -NoNewline
+  Write-Host "  Progress: " -NoNewline -ForegroundColor Gray
+  Write-Host $bar -NoNewline -ForegroundColor Cyan
+  Write-Host (" {0,3}% ({1}/{2})" -f $percentage, $Current, $Total) -NoNewline -ForegroundColor White
+
+  if ($CurrentItem) {
+    $maxLen = 35
+    $displayItem = if ($CurrentItem.Length -gt $maxLen) { $CurrentItem.Substring(0, $maxLen - 3) + "..." } else { $CurrentItem }
+    Write-Host " | " -NoNewline -ForegroundColor DarkGray
+    Write-Host "Current: " -NoNewline -ForegroundColor Gray
+    Write-Host $displayItem -NoNewline -ForegroundColor Cyan
+  }
+}
+
+Function Write-Summary {
+  param([hashtable]$Data)
+
+  Write-Host ""
+  Write-Host "  Assessment Summary" -ForegroundColor Cyan
+  Write-Host "  " -NoNewline
+  Write-Host ("─" * 76) -ForegroundColor DarkGray
+
+  foreach ($key in $Data.Keys) {
     Write-Host "  " -NoNewline
-    Write-Host ("─" * 76) -ForegroundColor DarkGray
-    Write-Host ""
+    Write-Host $key.PadRight(36) -NoNewline -ForegroundColor Gray
+    Write-Host ": " -NoNewline -ForegroundColor DarkGray
+    Write-Host $Data[$key] -ForegroundColor White
+  }
 }
 
-Function Write-ProgressBar
-{
-    param(
-        [int]$Current,
-        [int]$Total,
-        [string]$CurrentItem,
-        [int]$BarWidth = 40
-    )
+Function Write-EnforcementBreakdown {
+  param([hashtable]$Enforcement)
 
-    $percentage  = [math]::Round(($Current / [math]::Max($Total, 1)) * 100)
-    $completed   = [math]::Floor($BarWidth * $Current / [math]::Max($Total, 1))
-    $remaining   = $BarWidth - $completed
-    $bar         = ("█" * $completed) + ("░" * $remaining)
+  if ($Enforcement.Count -eq 0) { return }
 
-    Write-Host "`r" -NoNewline
-    Write-Host "  Progress: " -NoNewline -ForegroundColor Gray
-    Write-Host $bar -NoNewline -ForegroundColor Cyan
-    Write-Host (" {0,3}% ({1}/{2})" -f $percentage, $Current, $Total) -NoNewline -ForegroundColor White
+  Write-Host ""
+  Write-Host "  Enforcement Mode Breakdown" -ForegroundColor Cyan
+  Write-Host "  " -NoNewline
+  Write-Host ("─" * 76) -ForegroundColor DarkGray
 
-    if ($CurrentItem)
-    {
-        $maxLen      = 35
-        $displayItem = if ($CurrentItem.Length -gt $maxLen) { $CurrentItem.Substring(0, $maxLen - 3) + "..." } else { $CurrentItem }
-        Write-Host " | " -NoNewline -ForegroundColor DarkGray
-        Write-Host "Current: " -NoNewline -ForegroundColor Gray
-        Write-Host $displayItem -NoNewline -ForegroundColor Cyan
-    }
-}
+  $colorMap = @{ "Default" = "Red"; "DoNotEnforce" = "Yellow"; "Disabled" = "DarkGray" }
 
-Function Write-Summary
-{
-    param([hashtable]$Data)
-
-    Write-Host ""
-    Write-Host "  Assessment Summary" -ForegroundColor Cyan
+  foreach ($mode in ($Enforcement.GetEnumerator() | Sort-Object Value -Descending)) {
+    $color = if ($colorMap.ContainsKey($mode.Key)) { $colorMap[$mode.Key] } else { "White" }
     Write-Host "  " -NoNewline
-    Write-Host ("─" * 76) -ForegroundColor DarkGray
-
-    foreach ($key in $Data.Keys)
-    {
-        Write-Host "  " -NoNewline
-        Write-Host $key.PadRight(36) -NoNewline -ForegroundColor Gray
-        Write-Host ": " -NoNewline -ForegroundColor DarkGray
-        Write-Host $Data[$key] -ForegroundColor White
-    }
+    Write-Host $mode.Key.PadRight(22) -NoNewline -ForegroundColor White
+    Write-Host ": " -NoNewline -ForegroundColor DarkGray
+    Write-Host "$($mode.Value) assignment(s)" -ForegroundColor $color
+  }
 }
 
-Function Write-EnforcementBreakdown
-{
-    param([hashtable]$Enforcement)
+Function Write-ExemptionSummary {
+  param([array]$Exemptions)
 
-    if ($Enforcement.Count -eq 0) { return }
+  if ($Exemptions.Count -eq 0) { return }
 
-    Write-Host ""
-    Write-Host "  Enforcement Mode Breakdown" -ForegroundColor Cyan
+  $expired = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expired" }).Count
+  $expiringSoon = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expiring Soon" }).Count
+  $active = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Active" }).Count
+  $noExpiry = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "No Expiry Set" }).Count
+
+  Write-Host ""
+  Write-Host "  Exemption Summary" -ForegroundColor Cyan
+  Write-Host "  " -NoNewline
+  Write-Host ("─" * 76) -ForegroundColor DarkGray
+  Write-Host "  Total Exemptions      : $($Exemptions.Count)" -ForegroundColor White
+  Write-Host "  Active                : $active" -ForegroundColor Green
+  Write-Host "  Expiring Within 30d   : $expiringSoon" -ForegroundColor Yellow
+  Write-Host "  Expired               : $expired" -ForegroundColor Red
+  Write-Host "  No Expiry Set         : $noExpiry" -ForegroundColor DarkGray
+}
+
+Function Write-OutputFiles {
+  param(
+    [string]$CsvPath,
+    [string]$HtmlPath,
+    [bool]$GridViewOpened
+  )
+
+  Write-Host ""
+  Write-Host "  Output Files" -ForegroundColor Cyan
+  Write-Host "  " -NoNewline
+  Write-Host ("─" * 76) -ForegroundColor DarkGray
+
+  if ($CsvPath) {
     Write-Host "  " -NoNewline
-    Write-Host ("─" * 76) -ForegroundColor DarkGray
+    Write-Host "✓ " -NoNewline -ForegroundColor Green
+    Write-Host ("CSV Export").PadRight(22) -NoNewline -ForegroundColor Gray
+    Write-Host ": $CsvPath" -ForegroundColor White
+  }
 
-    $colorMap = @{ "Default" = "Red"; "DoNotEnforce" = "Yellow"; "Disabled" = "DarkGray" }
-
-    foreach ($mode in ($Enforcement.GetEnumerator() | Sort-Object Value -Descending))
-    {
-        $color = if ($colorMap.ContainsKey($mode.Key)) { $colorMap[$mode.Key] } else { "White" }
-        Write-Host "  " -NoNewline
-        Write-Host $mode.Key.PadRight(22) -NoNewline -ForegroundColor White
-        Write-Host ": " -NoNewline -ForegroundColor DarkGray
-        Write-Host "$($mode.Value) assignment(s)" -ForegroundColor $color
-    }
-}
-
-Function Write-ExemptionSummary
-{
-    param([array]$Exemptions)
-
-    if ($Exemptions.Count -eq 0) { return }
-
-    $expired      = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expired" }).Count
-    $expiringSoon = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expiring Soon" }).Count
-    $active       = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Active" }).Count
-    $noExpiry     = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "No Expiry Set" }).Count
-
-    Write-Host ""
-    Write-Host "  Exemption Summary" -ForegroundColor Cyan
+  if ($HtmlPath) {
     Write-Host "  " -NoNewline
-    Write-Host ("─" * 76) -ForegroundColor DarkGray
-    Write-Host "  Total Exemptions      : $($Exemptions.Count)" -ForegroundColor White
-    Write-Host "  Active                : $active" -ForegroundColor Green
-    Write-Host "  Expiring Within 30d   : $expiringSoon" -ForegroundColor Yellow
-    Write-Host "  Expired               : $expired" -ForegroundColor Red
-    Write-Host "  No Expiry Set         : $noExpiry" -ForegroundColor DarkGray
-}
+    Write-Host "✓ " -NoNewline -ForegroundColor Green
+    Write-Host ("HTML Dashboard").PadRight(22) -NoNewline -ForegroundColor Gray
+    Write-Host ": $HtmlPath" -ForegroundColor White
+  }
 
-Function Write-OutputFiles
-{
-    param(
-        [string]$CsvPath,
-        [string]$HtmlPath,
-        [bool]$GridViewOpened
-    )
-
-    Write-Host ""
-    Write-Host "  Output Files" -ForegroundColor Cyan
+  if ($GridViewOpened) {
     Write-Host "  " -NoNewline
-    Write-Host ("─" * 76) -ForegroundColor DarkGray
+    Write-Host "✓ " -NoNewline -ForegroundColor Green
+    Write-Host ("Grid View").PadRight(22) -NoNewline -ForegroundColor Gray
+    Write-Host ": Opened in separate window" -ForegroundColor White
+  }
 
-    if ($CsvPath)
-    {
-        Write-Host "  " -NoNewline
-        Write-Host "✓ " -NoNewline -ForegroundColor Green
-        Write-Host ("CSV Export").PadRight(22) -NoNewline -ForegroundColor Gray
-        Write-Host ": $CsvPath" -ForegroundColor White
-    }
-
-    if ($HtmlPath)
-    {
-        Write-Host "  " -NoNewline
-        Write-Host "✓ " -NoNewline -ForegroundColor Green
-        Write-Host ("HTML Dashboard").PadRight(22) -NoNewline -ForegroundColor Gray
-        Write-Host ": $HtmlPath" -ForegroundColor White
-    }
-
-    if ($GridViewOpened)
-    {
-        Write-Host "  " -NoNewline
-        Write-Host "✓ " -NoNewline -ForegroundColor Green
-        Write-Host ("Grid View").PadRight(22) -NoNewline -ForegroundColor Gray
-        Write-Host ": Opened in separate window" -ForegroundColor White
-    }
-
-    Write-Host ""
-    Write-Host ("═" * 80) -ForegroundColor Cyan
-    Write-Host ""
+  Write-Host ""
+  Write-Host ("═" * 80) -ForegroundColor Cyan
+  Write-Host ""
 }
 
-Function Get-ObjProperty
-{
-    param(
-        [object]$Obj,
-        [string]$PropName,
-        $Default = $null
-    )
-    try
-    {
-        $val = $Obj.$PropName
-        if ($null -ne $val) { return $val }
-        return $Default
-    }
-    catch { return $Default }
+Function Get-ObjProperty {
+  param(
+    [object]$Obj,
+    [string]$PropName,
+    $Default = $null
+  )
+  try {
+    $val = $Obj.$PropName
+    if ($null -ne $val) { return $val }
+    return $Default
+  }
+  catch { return $Default }
 }
 
 
 #------------------------------------------------------------------------ [ HTML Dashboard ]
 
-Function EscHtml { param([string]$s); return $s -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;' }
-Function EscJ    { param([string]$s); return $s -replace '\\','\\\\' -replace "'","\'" -replace '"','\"' -replace "`n",' ' -replace "`r",' ' }
+Function EscHtml { param([string]$s); return $s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;' }
+Function EscJ { param([string]$s); return $s -replace '\\', '\\\\' -replace "'", "\'" -replace '"', '\"' -replace "`n", ' ' -replace "`r", ' ' }
 
-Function Generate-PolicyGovernanceHtml
-{
-    param(
-        [hashtable]$SessionInfo,
-        [hashtable]$ScanParameters,
-        [array]$Assignments,
-        [array]$Exemptions,
-        [hashtable]$ScopeDistribution,
-        [hashtable]$EnforcementDistribution,
-        [hashtable]$DefinitionSummary,
-        [array]$Initiatives,
-        [array]$SubscriptionResults,
-        [string]$GeneratedOn,
-        [bool]$ComplianceStateIncluded
-    )
+Function Generate-PolicyGovernanceHtml {
+  param(
+    [hashtable]$SessionInfo,
+    [hashtable]$ScanParameters,
+    [array]$Assignments,
+    [array]$Exemptions,
+    [hashtable]$ScopeDistribution,
+    [hashtable]$EnforcementDistribution,
+    [hashtable]$DefinitionSummary,
+    [array]$Initiatives,
+    [array]$SubscriptionResults,
+    [string]$GeneratedOn,
+    [bool]$ComplianceStateIncluded
+  )
 
-    $totalAssignments   = @($Assignments).Count
-    $totalExemptions    = @($Exemptions).Count
-    $totalInitiatives   = @($Initiatives).Count
-    $totalCustomDefs    = ($DefinitionSummary.Values | Measure-Object -Sum).Sum
+  $totalAssignments = @($Assignments).Count
+  $totalExemptions = @($Exemptions).Count
+  $totalInitiatives = @($Initiatives).Count
+  $totalCustomDefs = ($DefinitionSummary.Values | Measure-Object -Sum).Sum
 
-    $denyCount          = @($Assignments | Where-Object { $_.EnforcementMode -eq "Default" -and $_.Effect -eq "Deny" }).Count
-    $auditCount         = @($Assignments | Where-Object { $_.Effect -in @("Audit","AuditIfNotExists") }).Count
-    $doNotEnforceCount  = @($Assignments | Where-Object { $_.EnforcementMode -eq "DoNotEnforce" }).Count
+  $denyCount = @($Assignments | Where-Object { $_.EnforcementMode -eq "Default" -and $_.Effect -eq "Deny" }).Count
+  $auditCount = @($Assignments | Where-Object { $_.Effect -in @("Audit", "AuditIfNotExists") }).Count
+  $doNotEnforceCount = @($Assignments | Where-Object { $_.EnforcementMode -eq "DoNotEnforce" }).Count
 
-    $expiredCount       = @($Exemptions  | Where-Object { $_.ExpiryStatus -eq "Expired" }).Count
-    $expiringSoonCount  = @($Exemptions  | Where-Object { $_.ExpiryStatus -eq "Expiring Soon" }).Count
+  $expiredCount = @($Exemptions  | Where-Object { $_.ExpiryStatus -eq "Expired" }).Count
+  $expiringSoonCount = @($Exemptions  | Where-Object { $_.ExpiryStatus -eq "Expiring Soon" }).Count
 
-    $complianceStateBadge = if ($ComplianceStateIncluded) {
-        '<span class="badge badge-green">✓ Included</span>'
-    } else {
-        '<span class="badge badge-amber">⚠ Skipped (use -IncludeComplianceState)</span>'
+  $complianceStateBadge = if ($ComplianceStateIncluded) {
+    '<span class="badge badge-green">✓ Included</span>'
+  }
+  else {
+    '<span class="badge badge-amber">⚠ Skipped (use -IncludeComplianceState)</span>'
+  }
+
+  $complianceStateText = if ($ComplianceStateIncluded) { "Included" } else { "Skipped — use -IncludeComplianceState to enable" }
+
+  # ── Assignment table rows ─────────────────────────────────────────────────
+  $assignmentRows = ""
+  foreach ($a in $Assignments) {
+    $enfCls = switch ($a.EnforcementMode) {
+      "Default" { "badge-red" }
+      "DoNotEnforce" { "badge-amber" }
+      default { "badge-blue" }
     }
+    $csBadge = if ($ComplianceStateIncluded) {
+      if ($a.ComplianceStateStatus -eq "Not Assessed / Warning") { '<span class="badge badge-amber">⚠ Not Assessed</span>' }
+      elseif ($a.NonCompliantResources -gt 0) { "<span class='badge badge-red'>✗ $($a.NonCompliantResources)</span>" }
+      else { '<span class="badge badge-green">✓ 0</span>' }
+    }
+    else { '<span class="badge" style="background:var(--surface3);color:var(--muted)">—</span>' }
 
-    $complianceStateText = if ($ComplianceStateIncluded) { "Included" } else { "Skipped — use -IncludeComplianceState to enable" }
-
-    # ── Assignment table rows ─────────────────────────────────────────────────
-    $assignmentRows = ""
-    foreach ($a in $Assignments)
-    {
-        $enfCls  = switch ($a.EnforcementMode) {
-            "Default"       { "badge-red"   }
-            "DoNotEnforce"  { "badge-amber" }
-            default         { "badge-blue"  }
-        }
-        $csBadge = if ($ComplianceStateIncluded)
-        {
-            if     ($a.ComplianceStateStatus -eq "Not Assessed / Warning") { '<span class="badge badge-amber">⚠ Not Assessed</span>' }
-            elseif ($a.NonCompliantResources  -gt 0)                       { "<span class='badge badge-red'>✗ $($a.NonCompliantResources)</span>" }
-            else                                                           { '<span class="badge badge-green">✓ 0</span>' }
-        }
-        else { '<span class="badge" style="background:var(--surface3);color:var(--muted)">—</span>' }
-
-        $scopeShort = if ($a.ScopeLevel) { $a.ScopeLevel } else { "Unknown" }
-        $assignmentRows += @"
+    $scopeShort = if ($a.ScopeLevel) { $a.ScopeLevel } else { "Unknown" }
+    $assignmentRows += @"
           <tr onclick="showAssignDetail($($Assignments.IndexOf($a)))">
             <td title="$(EscHtml $a.PolicyName)">$(if ($a.PolicyName.Length -gt 36) { EscHtml($a.PolicyName.Substring(0,33)+"...") } else { EscHtml $a.PolicyName })</td>
             <td>$(EscHtml $a.SubscriptionName)</td>
@@ -416,19 +394,18 @@ Function Generate-PolicyGovernanceHtml
             <td>$csBadge</td>
           </tr>
 "@
-    }
+  }
 
-    # ── Exemption table rows ──────────────────────────────────────────────────
-    $exemptionRows = ""
-    foreach ($e in $Exemptions)
-    {
-        $expCls = switch ($e.ExpiryStatus) {
-            "Expired"       { "badge-red"   }
-            "Expiring Soon" { "badge-amber" }
-            "Active"        { "badge-green" }
-            default         { ""            }
-        }
-        $exemptionRows += @"
+  # ── Exemption table rows ──────────────────────────────────────────────────
+  $exemptionRows = ""
+  foreach ($e in $Exemptions) {
+    $expCls = switch ($e.ExpiryStatus) {
+      "Expired" { "badge-red" }
+      "Expiring Soon" { "badge-amber" }
+      "Active" { "badge-green" }
+      default { "" }
+    }
+    $exemptionRows += @"
           <tr>
             <td title="$(EscHtml $e.ExemptionName)">$(if ($e.ExemptionName.Length -gt 32) { EscHtml($e.ExemptionName.Substring(0,29)+"...") } else { EscHtml $e.ExemptionName })</td>
             <td>$(EscHtml $e.SubscriptionName)</td>
@@ -438,13 +415,12 @@ Function Generate-PolicyGovernanceHtml
             <td style="font-family:var(--mono);font-size:11px">$(EscHtml $e.ExpiryDate)</td>
           </tr>
 "@
-    }
+  }
 
-    # ── Initiative table rows ─────────────────────────────────────────────────
-    $initiativeRows = ""
-    foreach ($i in $Initiatives)
-    {
-        $initiativeRows += @"
+  # ── Initiative table rows ─────────────────────────────────────────────────
+  $initiativeRows = ""
+  foreach ($i in $Initiatives) {
+    $initiativeRows += @"
           <tr>
             <td title="$(EscHtml $i.DisplayName)">$(if ($i.DisplayName.Length -gt 40) { EscHtml($i.DisplayName.Substring(0,37)+"...") } else { EscHtml $i.DisplayName })</td>
             <td>$(EscHtml $i.SubscriptionName)</td>
@@ -452,83 +428,80 @@ Function Generate-PolicyGovernanceHtml
             <td>$($i.PolicyDefinitionCount)</td>
           </tr>
 "@
-    }
+  }
 
-    # ── Subscription results ──────────────────────────────────────────────────
-    $subRows = ""
-    foreach ($s in $SubscriptionResults)
-    {
-        $icon = switch ($s.Status) { "Success" { "✓" }; "Warning" { "⚠" }; "Error" { "✗" }; default { "•" } }
-        $cls  = switch ($s.Status) { "Success" { "c-green" }; "Warning" { "c-amber" }; "Error" { "c-red" }; default { "" } }
-        $subRows += @"
+  # ── Subscription results ──────────────────────────────────────────────────
+  $subRows = ""
+  foreach ($s in $SubscriptionResults) {
+    $icon = switch ($s.Status) { "Success" { "✓" }; "Warning" { "⚠" }; "Error" { "✗" }; default { "•" } }
+    $cls = switch ($s.Status) { "Success" { "c-green" }; "Warning" { "c-amber" }; "Error" { "c-red" }; default { "" } }
+    $subRows += @"
           <div class="sub-row">
             <span class="sub-icon $cls">$icon</span>
             <span class="sub-name">$(EscHtml $s.Name)</span>
             <span class="sub-detail">$(EscHtml $s.Summary)</span>
           </div>
 "@
-    }
+  }
 
-    # ── Enforcement distribution bar rows ─────────────────────────────────────
-    $enfTotal = ($EnforcementDistribution.Values | Measure-Object -Sum).Sum
-    $enfRows  = ""
-    foreach ($e in ($EnforcementDistribution.GetEnumerator() | Sort-Object Value -Descending))
-    {
-        $pct      = if ($enfTotal -gt 0) { [math]::Round(($e.Value / $enfTotal) * 100) } else { 0 }
-        $barColor = switch ($e.Key) {
-            "Default"       { "var(--red)"   }
-            "DoNotEnforce"  { "var(--amber)" }
-            default         { "var(--muted)" }
-        }
-        $enfRows += @"
+  # ── Enforcement distribution bar rows ─────────────────────────────────────
+  $enfTotal = ($EnforcementDistribution.Values | Measure-Object -Sum).Sum
+  $enfRows = ""
+  foreach ($e in ($EnforcementDistribution.GetEnumerator() | Sort-Object Value -Descending)) {
+    $pct = if ($enfTotal -gt 0) { [math]::Round(($e.Value / $enfTotal) * 100) } else { 0 }
+    $barColor = switch ($e.Key) {
+      "Default" { "var(--red)" }
+      "DoNotEnforce" { "var(--amber)" }
+      default { "var(--muted)" }
+    }
+    $enfRows += @"
           <div class="bar-row">
             <span class="bar-label">$(EscHtml $e.Key)</span>
             <div class="bar-track"><div class="bar-fill" data-pct="$pct" style="background:$barColor"></div></div>
             <span class="bar-pct">$($e.Value) ($pct%)</span>
           </div>
 "@
-    }
+  }
 
-    # ── Scope distribution bar rows ───────────────────────────────────────────
-    $scopeTotal = ($ScopeDistribution.Values | Measure-Object -Sum).Sum
-    $scopeRows  = ""
-    foreach ($s in ($ScopeDistribution.GetEnumerator() | Sort-Object Value -Descending))
-    {
-        $pct       = if ($scopeTotal -gt 0) { [math]::Round(($s.Value / $scopeTotal) * 100) } else { 0 }
-        $scopeRows += @"
+  # ── Scope distribution bar rows ───────────────────────────────────────────
+  $scopeTotal = ($ScopeDistribution.Values | Measure-Object -Sum).Sum
+  $scopeRows = ""
+  foreach ($s in ($ScopeDistribution.GetEnumerator() | Sort-Object Value -Descending)) {
+    $pct = if ($scopeTotal -gt 0) { [math]::Round(($s.Value / $scopeTotal) * 100) } else { 0 }
+    $scopeRows += @"
           <div class="bar-row">
             <span class="bar-label">$(EscHtml $s.Key)</span>
             <div class="bar-track"><div class="bar-fill" data-pct="$pct"></div></div>
             <span class="bar-pct">$($s.Value) ($pct%)</span>
           </div>
 "@
+  }
+
+  # ── JSON for assignments detail drawer ────────────────────────────────────
+  $assignJson = "["
+  foreach ($a in $Assignments) {
+    $ncText = if ($ComplianceStateIncluded) {
+      if ($a.ComplianceStateStatus -eq "Not Assessed / Warning") { "Not Assessed / Warning: $(EscJ $a.ComplianceStateReason)" }
+      else { "$($a.NonCompliantResources) non-compliant resource(s)" }
     }
+    else { "Not included — run with -IncludeComplianceState" }
 
-    # ── JSON for assignments detail drawer ────────────────────────────────────
-    $assignJson = "["
-    foreach ($a in $Assignments)
-    {
-        $ncText = if ($ComplianceStateIncluded) {
-            if ($a.ComplianceStateStatus -eq "Not Assessed / Warning") { "Not Assessed / Warning: $(EscJ $a.ComplianceStateReason)" }
-            else { "$($a.NonCompliantResources) non-compliant resource(s)" }
-        } else { "Not included — run with -IncludeComplianceState" }
+    $assignJson += "{" +
+    """name"":""$(EscJ $a.PolicyName)""," +
+    """sub"":""$(EscJ $a.SubscriptionName)""," +
+    """mode"":""$(EscJ $a.EnforcementMode)""," +
+    """scope"":""$(EscJ $a.Scope)""," +
+    """scopeLevel"":""$(EscJ $a.ScopeLevel)""," +
+    """type"":""$(EscJ $a.Type)""," +
+    """params"":$($a.ParameterCount)," +
+    """initiative"":""$(EscJ $a.InitiativeName)""," +
+    """effect"":""$(EscJ $a.Effect)""," +
+    """nc"":""$(EscJ $ncText)""" +
+    "},"
+  }
+  $assignJson = $assignJson.TrimEnd(",") + "]"
 
-        $assignJson += "{" +
-            """name"":""$(EscJ $a.PolicyName)""," +
-            """sub"":""$(EscJ $a.SubscriptionName)""," +
-            """mode"":""$(EscJ $a.EnforcementMode)""," +
-            """scope"":""$(EscJ $a.Scope)""," +
-            """scopeLevel"":""$(EscJ $a.ScopeLevel)""," +
-            """type"":""$(EscJ $a.Type)""," +
-            """params"":$($a.ParameterCount)," +
-            """initiative"":""$(EscJ $a.InitiativeName)""," +
-            """effect"":""$(EscJ $a.Effect)""," +
-            """nc"":""$(EscJ $ncText)""" +
-        "},"
-    }
-    $assignJson = $assignJson.TrimEnd(",") + "]"
-
-    $html = @'
+  $html = @'
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -1211,565 +1184,513 @@ animateBars();
 </html>
 '@
 
-    # ── Exemption JSON (built separately to keep the here-string clean) ───────
-    $exemptJsonLines = "["
-    foreach ($e in $Exemptions)
-    {
-        $exemptJsonLines += "{" +
-            """name"":""$(EscJ $e.ExemptionName)""," +
-            """sub"":""$(EscJ $e.SubscriptionName)""," +
-            """policy"":""$(EscJ $e.PolicyAssignmentName)""," +
-            """category"":""$(EscJ $e.Category)""," +
-            """expiry"":""$(EscJ $e.ExpiryStatus)""," +
-            """date"":""$(EscJ $e.ExpiryDate)""" +
-        "},"
-    }
-    $exemptJsonLines = $exemptJsonLines.TrimEnd(",") + "]"
+  # ── Exemption JSON (built separately to keep the here-string clean) ───────
+  $exemptJsonLines = "["
+  foreach ($e in $Exemptions) {
+    $exemptJsonLines += "{" +
+    """name"":""$(EscJ $e.ExemptionName)""," +
+    """sub"":""$(EscJ $e.SubscriptionName)""," +
+    """policy"":""$(EscJ $e.PolicyAssignmentName)""," +
+    """category"":""$(EscJ $e.Category)""," +
+    """expiry"":""$(EscJ $e.ExpiryStatus)""," +
+    """date"":""$(EscJ $e.ExpiryDate)""" +
+    "},"
+  }
+  $exemptJsonLines = $exemptJsonLines.TrimEnd(",") + "]"
 
-    # ── Exemption stat counts ─────────────────────────────────────────────────
-    $exActive   = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Active"        }).Count
-    $exExpiring = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expiring Soon" }).Count
-    $exExpired  = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expired"       }).Count
-    $exNoExpiry = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "No Expiry Set" }).Count
+  # ── Exemption stat counts ─────────────────────────────────────────────────
+  $exActive = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Active" }).Count
+  $exExpiring = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expiring Soon" }).Count
+  $exExpired = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "Expired" }).Count
+  $exNoExpiry = @($Exemptions | Where-Object { $_.ExpiryStatus -eq "No Expiry Set" }).Count
 
-    $html = $html `
-        -replace '__GENERATED_ON__',      $GeneratedOn `
-        -replace '__SUB_COUNT__',         ($SubscriptionResults.Count) `
-        -replace '__TOTAL_ASSIGNMENTS__', $totalAssignments `
-        -replace '__DENY_COUNT__',        $denyCount `
-        -replace '__DO_NOT_ENFORCE__',    $doNotEnforceCount `
-        -replace '__TOTAL_INITIATIVES__', $totalInitiatives `
-        -replace '__TOTAL_EXEMPTIONS__',  $totalExemptions `
-        -replace '__EXPIRED_COUNT__',     $expiredCount `
-        -replace '__EXPIRING_COUNT__',    $expiringSoonCount `
-        -replace '__CUSTOM_DEFS__',       $totalCustomDefs `
-        -replace '__CS_BANNER_CLS__',     (if ($ComplianceStateIncluded) { "included" } else { "skipped" }) `
-        -replace '__CS_BANNER_TEXT__',    $complianceStateText `
-        -replace '__ENF_ROWS__',          $enfRows `
-        -replace '__SCOPE_ROWS__',        $scopeRows `
-        -replace '__EX_ACTIVE__',         $exActive `
-        -replace '__EX_EXPIRING__',       $exExpiring `
-        -replace '__EX_EXPIRED__',        $exExpired `
-        -replace '__EX_NOEXPIRY__',       $exNoExpiry `
-        -replace '__ASSIGNMENT_ROWS__',   $assignmentRows `
-        -replace '__INITIATIVE_ROWS__',   $initiativeRows `
-        -replace '__EXEMPTION_ROWS__',    $exemptionRows `
-        -replace '__SUB_ROWS__',          $subRows `
-        -replace '__TENANT__',            $SessionInfo.Tenant `
-        -replace '__ACCOUNT__',           $SessionInfo.Account `
-        -replace '__ENVIRONMENT__',       $SessionInfo.Environment `
-        -replace '__SCOPE__',             $ScanParameters.Scope `
-        -replace '__CS_TEXT__',           $complianceStateText `
-        -replace '__EXPORT_ENABLED__',    $ScanParameters.ExportEnabled `
-        -replace '__EXEC_TIME__',         $ScanParameters.ExecTime `
-        -replace '__ASSIGN_JSON__',       $assignJson `
-        -replace '__EXEMPT_JSON_RAW__',   ($exemptJsonLines -replace '`','``')
+  $html = $html `
+    -replace '__GENERATED_ON__', $GeneratedOn `
+    -replace '__SUB_COUNT__', ($SubscriptionResults.Count) `
+    -replace '__TOTAL_ASSIGNMENTS__', $totalAssignments `
+    -replace '__DENY_COUNT__', $denyCount `
+    -replace '__DO_NOT_ENFORCE__', $doNotEnforceCount `
+    -replace '__TOTAL_INITIATIVES__', $totalInitiatives `
+    -replace '__TOTAL_EXEMPTIONS__', $totalExemptions `
+    -replace '__EXPIRED_COUNT__', $expiredCount `
+    -replace '__EXPIRING_COUNT__', $expiringSoonCount `
+    -replace '__CUSTOM_DEFS__', $totalCustomDefs `
+    -replace '__CS_BANNER_CLS__', $(if ($ComplianceStateIncluded) { "included" } else { "skipped" }) `
+    -replace '__CS_BANNER_TEXT__', $complianceStateText `
+    -replace '__ENF_ROWS__', $enfRows `
+    -replace '__SCOPE_ROWS__', $scopeRows `
+    -replace '__EX_ACTIVE__', $exActive `
+    -replace '__EX_EXPIRING__', $exExpiring `
+    -replace '__EX_EXPIRED__', $exExpired `
+    -replace '__EX_NOEXPIRY__', $exNoExpiry `
+    -replace '__ASSIGNMENT_ROWS__', $assignmentRows `
+    -replace '__INITIATIVE_ROWS__', $initiativeRows `
+    -replace '__EXEMPTION_ROWS__', $exemptionRows `
+    -replace '__SUB_ROWS__', $subRows `
+    -replace '__TENANT__', $SessionInfo.Tenant `
+    -replace '__ACCOUNT__', $SessionInfo.Account `
+    -replace '__ENVIRONMENT__', $SessionInfo.Environment `
+    -replace '__SCOPE__', $ScanParameters.Scope `
+    -replace '__CS_TEXT__', $complianceStateText `
+    -replace '__EXPORT_ENABLED__', $ScanParameters.ExportEnabled `
+    -replace '__EXEC_TIME__', $ScanParameters.ExecTime `
+    -replace '__ASSIGN_JSON__', $assignJson `
+    -replace '__EXEMPT_JSON_RAW__', ($exemptJsonLines -replace '`', '``')
 
-    return $html
+  return $html
 }
 
 
 #------------------------------------------------------------------------ [ Main Function ]
 
-Function Get-AzurePolicyGovernanceAssessment
-{
-    [CmdletBinding()]
-    param (
-        [switch]$AllSubscriptions,
+Function Get-AzurePolicyGovernanceAssessment {
+  [CmdletBinding()]
+  param (
+    [switch]$AllSubscriptions,
 
-        [string[]]$SubscriptionIds,
+    [string[]]$SubscriptionIds,
 
-        [switch]$IncludeComplianceState,
+    [switch]$IncludeComplianceState,
 
-        [switch]$ExportToCsv,
+    [switch]$ExportToCsv,
 
-        [ValidateNotNullOrEmpty()]
-        [string]$CsvPath = "C:\Temp\AzurePolicyGovernance-Report.csv"
-    )
+    [ValidateNotNullOrEmpty()]
+    [string]$CsvPath = "C:\Temp\AzurePolicyGovernance-Report.csv"
+  )
 
-    $startTime = Get-Date
+  $startTime = Get-Date
 
-    Write-Banner
+  Write-Banner
 
-    # ── Module check ──────────────────────────────────────────────────────────
-    $requiredModules = @("Az.Accounts", "Az.Resources")
-    if ($IncludeComplianceState) { $requiredModules += "Az.PolicyInsights" }
+  # ── Module check ──────────────────────────────────────────────────────────
+  $requiredModules = @("Az.Accounts", "Az.Resources")
+  if ($IncludeComplianceState) { $requiredModules += "Az.PolicyInsights" }
 
-    $missingModules = $requiredModules | Where-Object { -not (Get-Module -ListAvailable -Name $_) }
+  $missingModules = $requiredModules | Where-Object { -not (Get-Module -ListAvailable -Name $_) }
 
-    if ($missingModules)
-    {
-        Write-Host "  ⚠ Missing Az modules: $($missingModules -join ', ')" -ForegroundColor Yellow
+  if ($missingModules) {
+    Write-Host "  ⚠ Missing Az modules: $($missingModules -join ', ')" -ForegroundColor Yellow
+    Write-Host ""
+    $install = Read-Host "  Install Az module now? (Y/N)"
+
+    if ($install -match '^[Yy]$') {
+      try {
         Write-Host ""
-        $install = Read-Host "  Install Az module now? (Y/N)"
-
-        if ($install -match '^[Yy]$')
-        {
-            try
-            {
-                Write-Host ""
-                Write-Host "  Installing Az module, please wait..." -ForegroundColor Cyan
-                Install-Module -Name Az -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
-                Import-Module Az -ErrorAction Stop
-                Write-Host "  ✓ Az module installed successfully" -ForegroundColor Green
-                Write-Host ""
-            }
-            catch
-            {
-                Write-Host "  ✗ Error installing Az module: $_" -ForegroundColor Red
-                return
-            }
-        }
-        else
-        {
-            Write-Host ""
-            Write-Host "  Installation declined. Cannot proceed without required Az modules." -ForegroundColor Yellow
-            return
-        }
+        Write-Host "  Installing Az module, please wait..." -ForegroundColor Cyan
+        Install-Module -Name Az -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
+        Import-Module Az -ErrorAction Stop
+        Write-Host "  ✓ Az module installed successfully" -ForegroundColor Green
+        Write-Host ""
+      }
+      catch {
+        Write-Host "  ✗ Error installing Az module: $_" -ForegroundColor Red
+        return
+      }
     }
-
-    # ── Authentication ────────────────────────────────────────────────────────
-    $ctx = Get-AzContext -ErrorAction SilentlyContinue
-    if (-not $ctx)
-    {
-        Write-Host "  ⚠ No active session. Authenticating..." -ForegroundColor Yellow
-        Connect-AzAccount -WarningAction SilentlyContinue
-        $ctx = Get-AzContext
+    else {
+      Write-Host ""
+      Write-Host "  Installation declined. Cannot proceed without required Az modules." -ForegroundColor Yellow
+      return
     }
+  }
 
-    # ── Subscription resolution ───────────────────────────────────────────────
-    if ($AllSubscriptions -or -not $SubscriptionIds)
-    {
-        $subscriptions = @(Get-AzSubscription -WarningAction SilentlyContinue)
-        $scopeText     = "All Subscriptions"
-    }
-    else
-    {
-        $subscriptions = @(Get-AzSubscription -WarningAction SilentlyContinue |
-                           Where-Object { $SubscriptionIds -contains $_.Id })
-        $scopeText     = "Specific Subscriptions ($($SubscriptionIds.Count))"
-    }
+  # ── Authentication ────────────────────────────────────────────────────────
+  $ctx = Get-AzContext -ErrorAction SilentlyContinue
+  if (-not $ctx) {
+    Write-Host "  ⚠ No active session. Authenticating..." -ForegroundColor Yellow
+    Connect-AzAccount -WarningAction SilentlyContinue
+    $ctx = Get-AzContext
+  }
 
-    $subCount = $subscriptions.Count
+  # ── Subscription resolution ───────────────────────────────────────────────
+  if ($AllSubscriptions -or -not $SubscriptionIds) {
+    $subscriptions = @(Get-AzSubscription -WarningAction SilentlyContinue)
+    $scopeText = "All Subscriptions"
+  }
+  else {
+    $subscriptions = @(Get-AzSubscription -WarningAction SilentlyContinue |
+      Where-Object { $SubscriptionIds -contains $_.Id })
+    $scopeText = "Specific Subscriptions ($($SubscriptionIds.Count))"
+  }
 
-    # ── Display session / params ──────────────────────────────────────────────
-    Write-Section -Title "Session Information" -Data @{
-        "Tenant"      = $ctx.Tenant.Id
-        "Account"     = $ctx.Account.Id
-        "Environment" = $ctx.Environment.Name
-    }
+  $subCount = $subscriptions.Count
 
-    Write-Section -Title "Scan Parameters" -Data @{
-        "Scope"                  = "$scopeText ($subCount found)"
-        "Compliance State"       = if ($IncludeComplianceState) { "Enabled (Get-AzPolicyState will be called)" } else { "Skipped (use -IncludeComplianceState to enable)" }
-        "Export to CSV"          = if ($ExportToCsv.IsPresent)   { "Enabled" } else { "Disabled" }
-        "Export Path"            = if ($ExportToCsv.IsPresent)   { $CsvPath }  else { "" }
-    }
+  # ── Display session / params ──────────────────────────────────────────────
+  Write-Section -Title "Session Information" -Data @{
+    "Tenant"      = $ctx.Tenant.Id
+    "Account"     = $ctx.Account.Id
+    "Environment" = $ctx.Environment.Name
+  }
 
-    # ── Collections ───────────────────────────────────────────────────────────
-    $allAssignments       = @()
-    $allExemptions        = @()
-    $allInitiatives       = @()
-    $subscriptionResults  = @()
-    $definitionSummary    = @{}     # SubscriptionName → custom def count
-    $enforcementDist      = @{}
-    $scopeDist            = @{ "Management Group" = 0; "Subscription" = 0; "Resource Group" = 0; "Resource" = 0 }
-    $successCount         = 0
-    $errorCount           = 0
+  Write-Section -Title "Scan Parameters" -Data @{
+    "Scope"            = "$scopeText ($subCount found)"
+    "Compliance State" = if ($IncludeComplianceState) { "Enabled (Get-AzPolicyState will be called)" } else { "Skipped (use -IncludeComplianceState to enable)" }
+    "Export to CSV"    = if ($ExportToCsv.IsPresent) { "Enabled" } else { "Disabled" }
+    "Export Path"      = if ($ExportToCsv.IsPresent) { $CsvPath }  else { "" }
+  }
 
-    # ── Scan ──────────────────────────────────────────────────────────────────
-    Write-ScanProgress
-    Write-ProgressBar -Current 0 -Total $subCount -CurrentItem "Starting..."
+  # ── Collections ───────────────────────────────────────────────────────────
+  $allAssignments = @()
+  $allExemptions = @()
+  $allInitiatives = @()
+  $subscriptionResults = @()
+  $definitionSummary = @{}     # SubscriptionName → custom def count
+  $enforcementDist = @{}
+  $scopeDist = @{ "Management Group" = 0; "Subscription" = 0; "Resource Group" = 0; "Resource" = 0 }
+  $successCount = 0
+  $errorCount = 0
 
-    $maxNameLen = ([math]::Max(
-        ($subscriptions | ForEach-Object { $_.Name.Length } | Measure-Object -Maximum).Maximum,
-        35
+  # ── Scan ──────────────────────────────────────────────────────────────────
+  Write-ScanProgress
+  Write-ProgressBar -Current 0 -Total $subCount -CurrentItem "Starting..."
+
+  $maxNameLen = ([math]::Max(
+      ($subscriptions | ForEach-Object { $_.Name.Length } | Measure-Object -Maximum).Maximum,
+      35
     ))
 
-    $subIndex = 1
+  $subIndex = 1
 
-    foreach ($sub in $subscriptions)
-    {
-        try
-        {
-            Write-ProgressBar -Current $subIndex -Total $subCount -CurrentItem $sub.Name
+  foreach ($sub in $subscriptions) {
+    try {
+      Write-ProgressBar -Current $subIndex -Total $subCount -CurrentItem $sub.Name
 
-            Set-AzContext -Subscription $sub.Id -WarningAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null
+      Set-AzContext -Subscription $sub.Id -WarningAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null
 
-            # ── Policy Definitions ────────────────────────────────────────────
-            $customDefs = 0
-            try
-            {
-                $defs       = @(Get-AzPolicyDefinition -Custom -ErrorAction Stop)
-                $customDefs = $defs.Count
-            }
-            catch
-            {
-                Write-Verbose "  Could not retrieve custom policy definitions for $($sub.Name): $_"
-            }
-            $definitionSummary[$sub.Name] = $customDefs
+      # ── Policy Definitions ────────────────────────────────────────────
+      $customDefs = 0
+      try {
+        $defs = @(Get-AzPolicyDefinition -Custom -ErrorAction Stop)
+        $customDefs = $defs.Count
+      }
+      catch {
+        Write-Verbose "  Could not retrieve custom policy definitions for $($sub.Name): $_"
+      }
+      $definitionSummary[$sub.Name] = $customDefs
 
-            # ── Policy Assignments ────────────────────────────────────────────
-            $assignments = @()
-            try
-            {
-                $assignments = @(Get-AzPolicyAssignment -ErrorAction Stop)
-            }
-            catch
-            {
-                Write-Warning "  Could not retrieve policy assignments for $($sub.Name): $_"
-            }
+      # ── Policy Assignments ────────────────────────────────────────────
+      $assignments = @()
+      try {
+        $assignments = @(Get-AzPolicyAssignment -ErrorAction Stop)
+      }
+      catch {
+        Write-Warning "  Could not retrieve policy assignments for $($sub.Name): $_"
+      }
 
-            foreach ($a in $assignments)
-            {
-                # Scope level classification
-                $scope = if ($a.Scope) { $a.Scope } else { "" }
-                if ([string]::IsNullOrWhiteSpace($scope)) { $scope = "" }
-                $scopeLevel = if     ($scope -like "*/providers/Microsoft.Management/managementGroups/*") { "Management Group" }
-                              elseif ($scope -match "^/subscriptions/[^/]+$")                             { "Subscription" }
-                              elseif ($scope -match "^/subscriptions/[^/]+/resourceGroups/[^/]+$")       { "Resource Group" }
-                              else                                                                         { "Resource" }
+      foreach ($a in $assignments) {
+        # Scope level classification
+        $scope = if ($a.Scope) { $a.Scope } else { "" }
+        if ([string]::IsNullOrWhiteSpace($scope)) { $scope = "" }
+        $scopeLevel = if ($scope -like "*/providers/Microsoft.Management/managementGroups/*") { "Management Group" }
+        elseif ($scope -match "^/subscriptions/[^/]+$") { "Subscription" }
+        elseif ($scope -match "^/subscriptions/[^/]+/resourceGroups/[^/]+$") { "Resource Group" }
+        else { "Resource" }
 
-                # Enforcement mode
-                $enfMode = if ($a.EnforcementMode) { $a.EnforcementMode } else { "Default" }
-                if ([string]::IsNullOrWhiteSpace($enfMode)) { $enfMode = "Default" }
+        # Enforcement mode
+        $enfMode = if ($a.EnforcementMode) { $a.EnforcementMode } else { "Default" }
+        if ([string]::IsNullOrWhiteSpace($enfMode)) { $enfMode = "Default" }
 
-                # Effect (best-effort from parameters)
-                $effect = ""
-                try
-                {
-                    try
-                    {
-                        $effect = if ($a.Parameter -and $a.Parameter.effect) { "$($a.Parameter.effect)" } else { "" }
-                    }
-                    catch { $effect = "" }
-                }
-                catch { }
-
-                # Parameter count
-                $paramCount = 0
-                try
-                {
-                    try
-                    {
-                        $paramCount = if ($a.Parameter) { @($a.Parameter | Get-Member -MemberType NoteProperty).Count } else { 0 }
-                    }
-                    catch { $paramCount = 0 }
-                }
-                catch { }
-
-                # Initiative reference
-                $initiativeName = ""
-                try
-                {
-                    $policyRef = if ($a.PolicyDefinitionId) { $a.PolicyDefinitionId } else { "" }
-                    if ($policyRef -like "*/policySetDefinitions/*")
-                    {
-                        $initiativeName = ($policyRef -split "/")[-1]
-                    }
-                }
-                catch { }
-
-                # Enforcement distribution
-                if ($enforcementDist.ContainsKey($enfMode)) { $enforcementDist[$enfMode]++ } else { $enforcementDist[$enfMode] = 1 }
-
-                # Scope distribution
-                if ($scopeDist.ContainsKey($scopeLevel)) { $scopeDist[$scopeLevel]++ }
-
-                # Compliance state (optional)
-                $ncResources    = 0
-                $csStatus       = "Not Requested"
-                $csReason       = ""
-
-                if ($IncludeComplianceState)
-                {
-                    try
-                    {
-                        $policyStates = @(Get-AzPolicyState -PolicyAssignmentName $a.Name -ErrorAction Stop |
-                                          Where-Object { $_.ComplianceState -eq "NonCompliant" })
-                        $ncResources  = $policyStates.Count
-                        $csStatus     = "Assessed"
-                    }
-                    catch
-                    {
-                        $csStatus = "Not Assessed / Warning"
-                        $csReason = $_.Exception.Message
-                        Write-Host ""
-                        Write-Host "  ⚠ Compliance state unavailable for '$($a.Name)': $csReason" -ForegroundColor Yellow
-                    }
-                }
-
-                $displayName = if ($a.DisplayName) { $a.DisplayName } elseif ($a.Name) { $a.Name } else { "Unknown" }
-                if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = Get-ObjProperty -Obj $a -PropName 'Name' -Default "Unknown" }
-
-                $allAssignments += [pscustomobject]@{
-                    SubscriptionName       = $sub.Name
-                    SubscriptionId         = $sub.Id
-                    PolicyName             = $displayName
-                    AssignmentId           = if ($a.Id) { $a.Id } else { $a.Name }
-                    EnforcementMode        = $enfMode
-                    Scope                  = $scope
-                    ScopeLevel             = $scopeLevel
-                    Type                   = if ($initiativeName) { "Initiative" } else { "Policy" }
-                    ParameterCount         = $paramCount
-                    Effect                 = $effect
-                    InitiativeName         = $initiativeName
-                    NonCompliantResources  = $ncResources
-                    ComplianceStateStatus  = $csStatus
-                    ComplianceStateReason  = $csReason
-                }
-            }
-
-            # ── Policy Initiatives ────────────────────────────────────────────
-            try
-            {
-                $sets = @(Get-AzPolicySetDefinition -ErrorAction Stop)
-                Write-Host "Initiative type: $($sets[0].GetType().FullName)"
-                $sets[0] | Get-Member -MemberType Properties | Format-Table Name, MemberType -AutoSize
-                foreach ($s in $sets)
-                {
-                    $defCount = 0
-                    try
-                    {
-                        $sProps    = Get-ObjProperty -Obj $s -PropName 'Properties' -Default $null
-                        $sDefs     = Get-ObjProperty -Obj $sProps -PropName 'PolicyDefinitions' -Default $null
-                        if ($sDefs) { $defCount = @($sDefs).Count }
-                    }
-                    catch { }
-
-                    $sProps     = Get-ObjProperty -Obj $s -PropName 'Properties' -Default $null
-                    $sDispName  = Get-ObjProperty -Obj $sProps -PropName 'DisplayName' -Default (Get-ObjProperty -Obj $s -PropName 'Name' -Default "Unknown")
-                    $sPolicyType = Get-ObjProperty -Obj $sProps -PropName 'PolicyType' -Default (Get-ObjProperty -Obj $s -PropName 'PolicyType' -Default "Unknown")
-                    $sPolicySetId = Get-ObjProperty -Obj $s -PropName 'PolicySetDefinitionId' -Default (Get-ObjProperty -Obj $s -PropName 'Name' -Default "Unknown")
-
-                    $allInitiatives += [pscustomobject]@{
-                        SubscriptionName      = $sub.Name
-                        SubscriptionId        = $sub.Id
-                        DisplayName           = $sDispName
-                        PolicySetDefinitionId = $sPolicySetId
-                        PolicyType            = $sPolicyType
-                        PolicyDefinitionCount = $defCount
-                    }
-                }
-            }
-            catch
-            {
-                Write-Verbose "  Could not retrieve policy initiatives for $($sub.Name): $_"
-            }
-
-            # ── Policy Exemptions ─────────────────────────────────────────────
-            try
-            {
-                $exemptions = @(Get-AzPolicyExemption -ErrorAction Stop)
-                if ($exemptions.Count -gt 0)
-                {
-                    Write-Host "Exemption type: $($exemptions[0].GetType().FullName)"
-                    $exemptions[0] | Get-Member -MemberType Properties | Format-Table Name, MemberType -AutoSize
-                }
-                foreach ($e in $exemptions)
-                {
-                    $expiryStatus = "No Expiry Set"
-                    $expiryDate   = "N/A"
-
-                    $eProps    = Get-ObjProperty -Obj $e -PropName 'Properties' -Default $null
-                    $expiresOn = Get-ObjProperty -Obj $eProps -PropName 'ExpiresOn' -Default (Get-ObjProperty -Obj $e -PropName 'ExpiresOn' -Default $null)
-                    if ($expiresOn)
-                    {
-                        $expiryDate   = $expiresOn.ToString("yyyy-MM-dd")
-                        $daysLeft     = ($expiresOn - (Get-Date)).Days
-                        $expiryStatus = if     ($daysLeft -lt 0)  { "Expired" }
-                                        elseif ($daysLeft -le 30) { "Expiring Soon" }
-                                        else                      { "Active" }
-                    }
-
-                    $assignmentName = ""
-                    try { 
-                        $epaid = Get-ObjProperty -Obj $eProps -PropName 'PolicyAssignmentId' -Default (Get-ObjProperty -Obj $e -PropName 'PolicyAssignmentId' -Default "")
-                        if ($epaid) { $assignmentName = ($epaid -split "/")[-1] }
-                    } 
-                    catch { }
-
-                    $allExemptions += [pscustomobject]@{
-                        SubscriptionName     = $sub.Name
-                        SubscriptionId       = $sub.Id
-                        ExemptionName        = Get-ObjProperty -Obj $eProps -PropName 'DisplayName'       -Default (Get-ObjProperty -Obj $e -PropName 'Name' -Default "Unknown")
-                        PolicyAssignmentName = $assignmentName
-                        Category             = Get-ObjProperty -Obj $eProps -PropName 'ExemptionCategory' -Default (Get-ObjProperty -Obj $e -PropName 'ExemptionCategory' -Default "Unknown")
-                        ExpiryStatus         = $expiryStatus
-                        ExpiryDate           = $expiryDate
-                        Scope                = if ($e.Id) { $e.Id } else { "" }
-                    }
-                }
-            }
-            catch
-            {
-                Write-Verbose "  Could not retrieve policy exemptions for $($sub.Name): $_"
-            }
-
-            # ── Per-subscription result ───────────────────────────────────────
-            Write-Host "`r$(' ' * 120)`r" -NoNewline
-            $paddedName = $sub.Name.PadRight($maxNameLen)
-
-            Write-Host "  " -NoNewline
-            Write-Host "✓ " -NoNewline -ForegroundColor Green
-            Write-Host $paddedName -NoNewline -ForegroundColor Green
-            Write-Host " → " -NoNewline -ForegroundColor DarkGray
-            Write-Host "Assignments: $($assignments.Count)  Initiatives: $($allInitiatives | Where-Object { $_.SubscriptionId -eq $sub.Id } | Measure-Object | Select-Object -Expand Count)  CustomDefs: $customDefs" -ForegroundColor White
-
-            $subscriptionResults += @{
-                Name    = $sub.Name
-                Summary = "Assignments: $($assignments.Count)  CustomDefs: $customDefs"
-                Status  = "Success"
-            }
-            $successCount++
+        # Effect (best-effort from parameters)
+        $effect = ""
+        try {
+          try {
+            $effect = if ($a.Parameter -and $a.Parameter.effect) { "$($a.Parameter.effect)" } else { "" }
+          }
+          catch { $effect = "" }
         }
-        catch
-        {
-            Write-Host "`r$(' ' * 120)`r" -NoNewline
-            $paddedName = $sub.Name.PadRight($maxNameLen)
-            Write-Host "  " -NoNewline
-            Write-Host "✗ " -NoNewline -ForegroundColor Red
-            Write-Host $paddedName -NoNewline -ForegroundColor Red
-            Write-Host " → " -NoNewline -ForegroundColor DarkGray
-            Write-Host "Failed: $($_.Exception.Message)" -ForegroundColor Red
+        catch { }
 
-            $subscriptionResults += @{
-                Name    = $sub.Name
-                Summary = "Failed: $($_.Exception.Message)"
-                Status  = "Error"
-            }
-            $errorCount++
+        # Parameter count
+        $paramCount = 0
+        try {
+          try {
+            $paramCount = if ($a.Parameter) { @($a.Parameter | Get-Member -MemberType NoteProperty).Count } else { 0 }
+          }
+          catch { $paramCount = 0 }
+        }
+        catch { }
+
+        # Initiative reference
+        $initiativeName = ""
+        try {
+          $policyRef = if ($a.PolicyDefinitionId) { $a.PolicyDefinitionId } else { "" }
+          if ($policyRef -like "*/policySetDefinitions/*") {
+            $initiativeName = ($policyRef -split "/")[-1]
+          }
+        }
+        catch { }
+
+        # Enforcement distribution
+        if ($enforcementDist.ContainsKey($enfMode)) { $enforcementDist[$enfMode]++ } else { $enforcementDist[$enfMode] = 1 }
+
+        # Scope distribution
+        if ($scopeDist.ContainsKey($scopeLevel)) { $scopeDist[$scopeLevel]++ }
+
+        # Compliance state (optional)
+        $ncResources = 0
+        $csStatus = "Not Requested"
+        $csReason = ""
+
+        if ($IncludeComplianceState) {
+          try {
+            $policyStates = @(Get-AzPolicyState -PolicyAssignmentName $a.Name -ErrorAction Stop |
+              Where-Object { $_.ComplianceState -eq "NonCompliant" })
+            $ncResources = $policyStates.Count
+            $csStatus = "Assessed"
+          }
+          catch {
+            $csStatus = "Not Assessed / Warning"
+            $csReason = $_.Exception.Message
+            Write-Host ""
+            Write-Host "  ⚠ Compliance state unavailable for '$($a.Name)': $csReason" -ForegroundColor Yellow
+          }
         }
 
-        $subIndex++
+        $displayName = if ($a.DisplayName) { $a.DisplayName } elseif ($a.Name) { $a.Name } else { "Unknown" }
+        if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = Get-ObjProperty -Obj $a -PropName 'Name' -Default "Unknown" }
+
+        $allAssignments += [pscustomobject]@{
+          SubscriptionName      = $sub.Name
+          SubscriptionId        = $sub.Id
+          PolicyName            = $displayName
+          AssignmentId          = if ($a.Id) { $a.Id } else { $a.Name }
+          EnforcementMode       = $enfMode
+          Scope                 = $scope
+          ScopeLevel            = $scopeLevel
+          Type                  = if ($initiativeName) { "Initiative" } else { "Policy" }
+          ParameterCount        = $paramCount
+          Effect                = $effect
+          InitiativeName        = $initiativeName
+          NonCompliantResources = $ncResources
+          ComplianceStateStatus = $csStatus
+          ComplianceStateReason = $csReason
+        }
+      }
+
+      # ── Policy Initiatives ────────────────────────────────────────────
+      try {
+        $sets = @(Get-AzPolicySetDefinition -ErrorAction Stop)
+        # Write-Host "Exemption type: $($exemptions[0].GetType().FullName)"
+        # $exemptions[0] | Get-Member -MemberType Properties | Format-Table Name, MemberType -AutoSize
+        foreach ($s in $sets) {
+          $defCount = 0
+          try {
+            try { $defCount = @($s.PolicyDefinition).Count } catch { $defCount = 0 }
+          }
+          catch { }
+
+          $sDispName = if ($s.DisplayName) { $s.DisplayName } else { $s.Name }
+          $sPolicyType = if ($s.PolicyType) { $s.PolicyType } else { "Unknown" }
+          $sPolicySetId = if ($s.Id) { $s.Id } else { $s.Name }
+
+          $allInitiatives += [pscustomobject]@{
+            SubscriptionName      = $sub.Name
+            SubscriptionId        = $sub.Id
+            DisplayName           = $sDispName
+            PolicySetDefinitionId = $sPolicySetId
+            PolicyType            = $sPolicyType
+            PolicyDefinitionCount = $defCount
+          }
+        }
+      }
+      catch {
+        Write-Host "  ⚠ Initiatives error for $($sub.Name): $_" -ForegroundColor Yellow
+      }
+
+      # ── Policy Exemptions ─────────────────────────────────────────────
+      try {
+        $exemptions = @(Get-AzPolicyExemption -ErrorAction Stop)
+        # if ($exemptions.Count -gt 0) {
+        #   Write-Host "Exemption type: $($exemptions[0].GetType().FullName)"
+        #   $exemptions[0] | Get-Member -MemberType Properties | Format-Table Name, MemberType -AutoSize
+        # }
+        foreach ($e in $exemptions) {
+          $expiryStatus = "No Expiry Set"
+          $expiryDate = "N/A"
+
+          $eProps = Get-ObjProperty -Obj $e -PropName 'Properties' -Default $null
+          $expiresOn = Get-ObjProperty -Obj $eProps -PropName 'ExpiresOn' -Default (Get-ObjProperty -Obj $e -PropName 'ExpiresOn' -Default $null)
+          if ($expiresOn) {
+            $expiryDate = $expiresOn.ToString("yyyy-MM-dd")
+            $daysLeft = ($expiresOn - (Get-Date)).Days
+            $expiryStatus = if ($daysLeft -lt 0) { "Expired" }
+            elseif ($daysLeft -le 30) { "Expiring Soon" }
+            else { "Active" }
+          }
+
+          $assignmentName = ""
+          try { 
+            $epaid = Get-ObjProperty -Obj $eProps -PropName 'PolicyAssignmentId' -Default (Get-ObjProperty -Obj $e -PropName 'PolicyAssignmentId' -Default "")
+            if ($epaid) { $assignmentName = ($epaid -split "/")[-1] }
+          } 
+          catch { }
+
+          $allExemptions += [pscustomobject]@{
+            SubscriptionName     = $sub.Name
+            SubscriptionId       = $sub.Id
+            ExemptionName        = Get-ObjProperty -Obj $eProps -PropName 'DisplayName'       -Default (Get-ObjProperty -Obj $e -PropName 'Name' -Default "Unknown")
+            PolicyAssignmentName = $assignmentName
+            Category             = Get-ObjProperty -Obj $eProps -PropName 'ExemptionCategory' -Default (Get-ObjProperty -Obj $e -PropName 'ExemptionCategory' -Default "Unknown")
+            ExpiryStatus         = $expiryStatus
+            ExpiryDate           = $expiryDate
+            Scope                = if ($e.Id) { $e.Id } else { "" }
+          }
+        }
+      }
+      catch {
+        Write-Verbose "  Could not retrieve policy exemptions for $($sub.Name): $_"
+      }
+
+      # ── Per-subscription result ───────────────────────────────────────
+      Write-Host "`r$(' ' * 120)`r" -NoNewline
+      $paddedName = $sub.Name.PadRight($maxNameLen)
+
+      Write-Host "  " -NoNewline
+      Write-Host "✓ " -NoNewline -ForegroundColor Green
+      Write-Host $paddedName -NoNewline -ForegroundColor Green
+      Write-Host " → " -NoNewline -ForegroundColor DarkGray
+      Write-Host "Assignments: $($assignments.Count)  Initiatives: $($allInitiatives | Where-Object { $_.SubscriptionId -eq $sub.Id } | Measure-Object | Select-Object -Expand Count)  CustomDefs: $customDefs" -ForegroundColor White
+
+      $subscriptionResults += @{
+        Name    = $sub.Name
+        Summary = "Assignments: $($assignments.Count)  CustomDefs: $customDefs"
+        Status  = "Success"
+      }
+      $successCount++
+    }
+    catch {
+      Write-Host "`r$(' ' * 120)`r" -NoNewline
+      $paddedName = $sub.Name.PadRight($maxNameLen)
+      Write-Host "  " -NoNewline
+      Write-Host "✗ " -NoNewline -ForegroundColor Red
+      Write-Host $paddedName -NoNewline -ForegroundColor Red
+      Write-Host " → " -NoNewline -ForegroundColor DarkGray
+      Write-Host "Failed: $($_.Exception.Message)" -ForegroundColor Red
+
+      $subscriptionResults += @{
+        Name    = $sub.Name
+        Summary = "Failed: $($_.Exception.Message)"
+        Status  = "Error"
+      }
+      $errorCount++
     }
 
-    # ── Summary output ────────────────────────────────────────────────────────
-    $endTime  = Get-Date
-    $duration = "{0:hh\:mm\:ss}" -f ($endTime - $startTime)
+    $subIndex++
+  }
 
-    Write-Summary -Data ([ordered]@{
-        "Total Subscriptions Scanned"  = $subCount
-        "Successful"                   = $successCount
-        "Errors"                       = $errorCount
-        "Total Assignments Found"      = $allAssignments.Count
-        "Total Initiatives Found"      = $allInitiatives.Count
-        "Total Exemptions Found"       = $allExemptions.Count
-        "Compliance State Assessed"    = if ($IncludeComplianceState) { "Yes" } else { "No (use -IncludeComplianceState)" }
-        "Execution Time"               = $duration
+  # ── Summary output ────────────────────────────────────────────────────────
+  $endTime = Get-Date
+  $duration = "{0:hh\:mm\:ss}" -f ($endTime - $startTime)
+
+  Write-Summary -Data ([ordered]@{
+      "Total Subscriptions Scanned" = $subCount
+      "Successful"                  = $successCount
+      "Errors"                      = $errorCount
+      "Total Assignments Found"     = $allAssignments.Count
+      "Total Initiatives Found"     = $allInitiatives.Count
+      "Total Exemptions Found"      = $allExemptions.Count
+      "Compliance State Assessed"   = if ($IncludeComplianceState) { "Yes" } else { "No (use -IncludeComplianceState)" }
+      "Execution Time"              = $duration
     })
 
-    Write-EnforcementBreakdown -Enforcement $enforcementDist
-    Write-ExemptionSummary     -Exemptions  $allExemptions
+  Write-EnforcementBreakdown -Enforcement $enforcementDist
+  Write-ExemptionSummary     -Exemptions  $allExemptions
 
-    # ── Output files ──────────────────────────────────────────────────────────
-    $csvExported    = $false
-    $htmlExported   = $false
-    $gridViewOpened = $false
-    $htmlPath       = ""
+  # ── Output files ──────────────────────────────────────────────────────────
+  $csvExported = $false
+  $htmlExported = $false
+  $gridViewOpened = $false
+  $htmlPath = ""
 
-    if ($allAssignments.Count -gt 0 -or $allExemptions.Count -gt 0)
-    {
-        # CSV — flatten to two sheets worth of data in one file
-        if ($ExportToCsv)
-        {
-            try
-            {
-                $csvDir = Split-Path -Parent $CsvPath
-                if ($csvDir -and -not (Test-Path $csvDir)) { New-Item -ItemType Directory -Path $csvDir -Force | Out-Null }
+  if ($allAssignments.Count -gt 0 -or $allExemptions.Count -gt 0) {
+    # CSV — flatten to two sheets worth of data in one file
+    if ($ExportToCsv) {
+      try {
+        $csvDir = Split-Path -Parent $CsvPath
+        if ($csvDir -and -not (Test-Path $csvDir)) { New-Item -ItemType Directory -Path $csvDir -Force | Out-Null }
 
-                $csvRows = $allAssignments | Select-Object `
-                    SubscriptionName, SubscriptionId, PolicyName, AssignmentId,
-                    EnforcementMode, Scope, ScopeLevel, Type, ParameterCount, Effect,
-                    InitiativeName, NonCompliantResources, ComplianceStateStatus, ComplianceStateReason
+        $csvRows = $allAssignments | Select-Object `
+          SubscriptionName, SubscriptionId, PolicyName, AssignmentId,
+        EnforcementMode, Scope, ScopeLevel, Type, ParameterCount, Effect,
+        InitiativeName, NonCompliantResources, ComplianceStateStatus, ComplianceStateReason
 
-                $csvRows | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
+        $csvRows | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
 
-                # Exemptions as a second CSV alongside the main one
-                if ($allExemptions.Count -gt 0)
-                {
-                    $exemptCsvPath = [System.IO.Path]::ChangeExtension($CsvPath, '') + "Exemptions.csv"
-                    $allExemptions | Export-Csv -Path $exemptCsvPath -NoTypeInformation -Encoding UTF8
-                }
-
-                $csvExported = $true
-            }
-            catch
-            {
-                Write-Host "  ✗ CSV export failed: $_" -ForegroundColor Red
-            }
+        # Exemptions as a second CSV alongside the main one
+        if ($allExemptions.Count -gt 0) {
+          $exemptCsvPath = [System.IO.Path]::ChangeExtension($CsvPath, '') + "Exemptions.csv"
+          $allExemptions | Export-Csv -Path $exemptCsvPath -NoTypeInformation -Encoding UTF8
         }
 
-        # HTML dashboard
-        try
-        {
-            $htmlPath = [System.IO.Path]::ChangeExtension($CsvPath, '.html')
-
-            $sessionInfo = @{
-                Tenant      = $ctx.Tenant.Id
-                Account     = $ctx.Account.Id
-                Environment = $ctx.Environment.Name
-            }
-
-            $scanParams = @{
-                Scope          = "$scopeText ($subCount found)"
-                ExportEnabled  = if ($ExportToCsv.IsPresent) { "Enabled" } else { "Disabled" }
-                ExecTime       = $duration
-            }
-
-            $htmlContent = Generate-PolicyGovernanceHtml `
-                -SessionInfo            $sessionInfo `
-                -ScanParameters         $scanParams `
-                -Assignments            $allAssignments `
-                -Exemptions             $allExemptions `
-                -ScopeDistribution      $scopeDist `
-                -EnforcementDistribution $enforcementDist `
-                -DefinitionSummary      $definitionSummary `
-                -Initiatives            $allInitiatives `
-                -SubscriptionResults    $subscriptionResults `
-                -GeneratedOn            (Get-Date -Format "MMMM dd, yyyy 'at' hh:mm:ss tt") `
-                -ComplianceStateIncluded $IncludeComplianceState.IsPresent
-
-            $htmlDir = Split-Path -Parent $htmlPath
-            if ($htmlDir -and -not (Test-Path $htmlDir)) { New-Item -ItemType Directory -Path $htmlDir -Force | Out-Null }
-            $htmlContent | Out-File -FilePath $htmlPath -Encoding UTF8 -Force
-            $htmlExported = $true
-        }
-        catch
-        {
-            Write-Host "  ✗ HTML dashboard generation failed: $_" -ForegroundColor Red
-        }
-
-        # Grid View
-        try
-        {
-            $allAssignments |
-                Select-Object SubscriptionName, PolicyName, EnforcementMode, ScopeLevel, Type, ParameterCount, NonCompliantResources, ComplianceStateStatus |
-                Out-GridView -Title "Azure Policy Governance Assessment"
-            $gridViewOpened = $true
-        }
-        catch
-        {
-            Write-Host "  ⚠ Could not open Grid View (no GUI available)" -ForegroundColor Yellow
-        }
-    }
-    else
-    {
-        Write-Host ""
-        Write-Host "  ⚠ No policy data found in the targeted subscriptions." -ForegroundColor Yellow
+        $csvExported = $true
+      }
+      catch {
+        Write-Host "  ✗ CSV export failed: $_" -ForegroundColor Red
+      }
     }
 
-    if ($csvExported -or $htmlExported -or $gridViewOpened)
-    {
-        Write-OutputFiles `
-            -CsvPath        (if ($csvExported)    { $CsvPath  } else { $null }) `
-            -HtmlPath       (if ($htmlExported)   { $htmlPath } else { $null }) `
-            -GridViewOpened $gridViewOpened
+    # HTML dashboard
+    try {
+      $htmlPath = [System.IO.Path]::ChangeExtension($CsvPath, '.html')
+
+      $sessionInfo = @{
+        Tenant      = $ctx.Tenant.Id
+        Account     = $ctx.Account.Id
+        Environment = $ctx.Environment.Name
+      }
+
+      $scanParams = @{
+        Scope         = "$scopeText ($subCount found)"
+        ExportEnabled = if ($ExportToCsv.IsPresent) { "Enabled" } else { "Disabled" }
+        ExecTime      = $duration
+      }
+
+      $htmlContent = Generate-PolicyGovernanceHtml `
+        -SessionInfo            $sessionInfo `
+        -ScanParameters         $scanParams `
+        -Assignments            $allAssignments `
+        -Exemptions             $allExemptions `
+        -ScopeDistribution      $scopeDist `
+        -EnforcementDistribution $enforcementDist `
+        -DefinitionSummary      $definitionSummary `
+        -Initiatives            $allInitiatives `
+        -SubscriptionResults    $subscriptionResults `
+        -GeneratedOn            (Get-Date -Format "MMMM dd, yyyy 'at' hh:mm:ss tt") `
+        -ComplianceStateIncluded $IncludeComplianceState.IsPresent
+
+      $htmlDir = Split-Path -Parent $htmlPath
+      if ($htmlDir -and -not (Test-Path $htmlDir)) { New-Item -ItemType Directory -Path $htmlDir -Force | Out-Null }
+      $htmlContent | Out-File -FilePath $htmlPath -Encoding UTF8 -Force
+      $htmlExported = $true
     }
-    else
-    {
-        Write-Host ""
-        Write-Host ("═" * 80) -ForegroundColor Cyan
-        Write-Host ""
+    catch {
+      Write-Host "  ✗ HTML dashboard generation failed: $_" -ForegroundColor Red
     }
+
+    # Grid View
+    try {
+      $allAssignments |
+      Select-Object SubscriptionName, PolicyName, EnforcementMode, ScopeLevel, Type, ParameterCount, NonCompliantResources, ComplianceStateStatus |
+      Out-GridView -Title "Azure Policy Governance Assessment"
+      $gridViewOpened = $true
+    }
+    catch {
+      Write-Host "  ⚠ Could not open Grid View (no GUI available)" -ForegroundColor Yellow
+    }
+  }
+  else {
+    Write-Host ""
+    Write-Host "  ⚠ No policy data found in the targeted subscriptions." -ForegroundColor Yellow
+  }
+
+  if ($csvExported -or $htmlExported -or $gridViewOpened) {
+    $outCsv = if ($csvExported) { $CsvPath } else { $null }
+    $outHtml = if ($htmlExported) { $htmlPath } else { $null }
+    Write-OutputFiles -CsvPath $outCsv -HtmlPath $outHtml -GridViewOpened $gridViewOpened
+  }
+  else {
+    Write-Host ""
+    Write-Host ("═" * 80) -ForegroundColor Cyan
+    Write-Host ""
+  }
 }
