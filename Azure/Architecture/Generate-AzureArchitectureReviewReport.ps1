@@ -1364,7 +1364,7 @@ Function Invoke-IdentityAccessChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve custom roles for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve custom roles for ${SubscriptionName}: $_"
     }
 
     # Check 3: Service principals with secrets (credential expiry check)
@@ -1384,7 +1384,7 @@ Function Invoke-IdentityAccessChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve SP assignments for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve SP assignments for ${SubscriptionName}: $_"
     }
 
     # Check 4: Conditional Access (informational — not available via Az module)
@@ -1461,7 +1461,7 @@ Function Invoke-NetworkingChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve public IPs for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve public IPs for ${SubscriptionName}: $_"
     }
 
     # Check 3: DDoS protection
@@ -1489,7 +1489,7 @@ Function Invoke-NetworkingChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve DDoS plans for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve DDoS plans for ${SubscriptionName}: $_"
     }
 
     # Check 4: Private endpoints
@@ -1517,7 +1517,7 @@ Function Invoke-NetworkingChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve private endpoints for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve private endpoints for ${SubscriptionName}: $_"
     }
 
     return $findings
@@ -1624,7 +1624,7 @@ Function Invoke-SecurityChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve VMs for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve VMs for ${SubscriptionName}: $_"
     }
 
     # Check 3: Defender for Cloud (live or heuristic)
@@ -1763,7 +1763,7 @@ Function Invoke-GovernanceChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve resources for tagging check in $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve resources for tagging check in ${SubscriptionName}: $_"
     }
 
     # Check 3: Budget alerts
@@ -1791,7 +1791,7 @@ Function Invoke-GovernanceChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve budgets for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve budgets for ${SubscriptionName}: $_"
     }
 
     return $findings
@@ -1868,7 +1868,7 @@ Function Invoke-ResilienceChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve load balancers for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve load balancers for ${SubscriptionName}: $_"
     }
 
     # Check 3: Availability sets vs. zones
@@ -1905,7 +1905,7 @@ Function Invoke-ResilienceChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve VMs for resilience check in $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve VMs for resilience check in ${SubscriptionName}: $_"
     }
 
     return $findings
@@ -1994,7 +1994,7 @@ Function Invoke-CostChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve managed disks for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve managed disks for ${SubscriptionName}: $_"
     }
 
     # Check 3: Deallocated VMs (potential idle cost)
@@ -2015,7 +2015,7 @@ Function Invoke-CostChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve VM status for cost check in $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve VM status for cost check in ${SubscriptionName}: $_"
     }
 
     return $findings
@@ -2089,7 +2089,7 @@ Function Invoke-ObservabilityChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve alert rules for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve alert rules for ${SubscriptionName}: $_"
     }
 
     # Check 3: Application Insights
@@ -2117,7 +2117,7 @@ Function Invoke-ObservabilityChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve Application Insights for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve Application Insights for ${SubscriptionName}: $_"
     }
 
     # Check 4: Activity log alerts
@@ -2145,7 +2145,7 @@ Function Invoke-ObservabilityChecks
     }
     catch
     {
-        Write-Verbose "Could not retrieve Activity Log alerts for $SubscriptionName: $_"
+        Write-Verbose "Could not retrieve Activity Log alerts for ${SubscriptionName}: $_"
     }
 
     return $findings
