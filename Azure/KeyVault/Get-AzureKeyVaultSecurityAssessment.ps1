@@ -394,6 +394,9 @@ Function Get-KvRiskScore {
 
 #------------------------------------------------------------------------ [ HTML Report Generator ]
 
+Function EscHtml { param([string]$s); return $s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;' }
+Function EscJ { param([string]$s); return $s -replace '\\', '\\\\' -replace "'", "\'" -replace '"', '\"' -replace "`n", ' ' -replace "`r", ' ' }
+
 Function Generate-KvHtmlReport {
     param(
         [hashtable]$SessionInfo,
@@ -409,406 +412,731 @@ Function Generate-KvHtmlReport {
         [bool]$GridViewOpened
     )
 
-    $timestamp = Get-Date -Format "MMMM dd, yyyy 'at' hh:mm:ss tt"
+    $generatedOn = Get-Date -Format "MMMM dd, yyyy 'at' hh:mm:ss tt"
 
-    # ── Subscription results rows ────────────────────────────────────────────────
-    $subscriptionHtml = ""
-    foreach ($sub in $SubscriptionResults) {
-        $icon = switch ($sub.Status) {
-            "Success" { "✓" }
-            "Warning" { "⚠" }
-            "Error" { "✗" }
-            default { "•" }
-        }
-        $subscriptionHtml += @"
-                    <div class="subscription-item">
-                        <span class="status-icon">$icon</span>
-                        <span class="subscription-name">$($sub.Name)</span>
-                        <span class="assignment-count">$($sub.Count)</span>
-                    </div>
-"@
-    }
-
-    # ── Risk distribution bars ───────────────────────────────────────────────────
     $riskOrder = @("Critical", "High", "Medium", "Low")
-    $riskColors = @{ Critical = "#f85149"; High = "#d29922"; Medium = "#e3b341"; Low = "#3fb950" }
-    $riskDistributionHtml = ""
+    $riskBadgeCls = @{ Critical = "badge-red"; High = "badge-amber"; Medium = "badge-purple"; Low = "badge-green" }
+    $riskBarColor = @{ Critical = "var(--red)"; High = "var(--amber)"; Medium = "var(--accent3)"; Low = "var(--green)" }
+
+    $criticalCount = if ($RiskDistribution.ContainsKey('Critical')) { $RiskDistribution['Critical'] } else { 0 }
+    $highCount = if ($RiskDistribution.ContainsKey('High')) { $RiskDistribution['High'] } else { 0 }
+    $mediumCount = if ($RiskDistribution.ContainsKey('Medium')) { $RiskDistribution['Medium'] } else { 0 }
+    $lowCount = if ($RiskDistribution.ContainsKey('Low')) { $RiskDistribution['Low'] } else { 0 }
+
+    # ── Risk distribution bar rows (reused on Overview + Risk & Controls tabs) ────
+    $riskRows = ""
     foreach ($rating in $riskOrder) {
         $count = if ($RiskDistribution.ContainsKey($rating)) { $RiskDistribution[$rating] } else { 0 }
-        $percent = if ($TotalVaults -gt 0) { [math]::Round(($count / $TotalVaults) * 100) } else { 0 }
-        $color = $riskColors[$rating]
-        $riskDistributionHtml += @"
-                    <div class="distribution-item">
-                        <div class="distribution-label">
-                            <span style="color:$color;font-weight:600;">$rating</span>
-                            <span>$count vault(s) — $percent%</span>
-                        </div>
-                        <div class="distribution-bar">
-                            <div class="distribution-fill" style="width:$percent%;background:$color;"></div>
-                        </div>
-                    </div>
+        $pct = if ($TotalVaults -gt 0) { [math]::Round(($count / $TotalVaults) * 100) } else { 0 }
+        $riskRows += @"
+          <div class="bar-row">
+            <span class="bar-label">$(EscHtml $rating)</span>
+            <div class="bar-track"><div class="bar-fill" data-pct="$pct" style="background:$($riskBarColor[$rating])"></div></div>
+            <span class="bar-pct">$count ($pct%)</span>
+          </div>
 "@
     }
 
-    # ── Top failed controls ──────────────────────────────────────────────────────
-    $topControlsHtml = ""
-    $counter = 1
-    foreach ($ctrl in ($ControlFailCounts.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 8)) {
-        $topControlsHtml += @"
-                    <div class="top-item">
-                        <div class="rank">$counter</div>
-                        <div class="item-name">$($ctrl.Key)</div>
-                        <div class="item-count">$($ctrl.Value) vault(s)</div>
-                    </div>
+    # ── Control fail-count bar rows (full list — 8 controls) ──────────────────────
+    $controlTotal = $TotalVaults
+    $controlRowsFull = ""
+    $controlRowsTop = ""
+    $ctrlCounter = 0
+    foreach ($ctrl in ($ControlFailCounts.GetEnumerator() | Sort-Object Value -Descending)) {
+        $pct = if ($controlTotal -gt 0) { [math]::Round(($ctrl.Value / $controlTotal) * 100) } else { 0 }
+        $row = @"
+          <div class="bar-row">
+            <span class="bar-label" title="$(EscHtml $ctrl.Key)">$(EscHtml $ctrl.Key)</span>
+            <div class="bar-track"><div class="bar-fill" data-pct="$pct"></div></div>
+            <span class="bar-pct">$($ctrl.Value) ($pct%)</span>
+          </div>
 "@
-        $counter++
+        $controlRowsFull += $row
+        if ($ctrlCounter -lt 5) { $controlRowsTop += $row }
+        $ctrlCounter++
     }
 
-    # ── Top 5 riskiest vaults ────────────────────────────────────────────────────
+    # ── Top 5 riskiest vaults (reuses sub-row markup) ──────────────────────────────
     $topVaultsHtml = ""
-    $counter = 1
-    foreach ($vault in ($AllFindings | Sort-Object RiskScore -Descending | Select-Object -First 5)) {
-        $riskColor = $riskColors[$vault.OverallRisk]
-        if (-not $riskColor) { $riskColor = "#7d8590" }
+    foreach ($v in ($AllFindings | Sort-Object RiskScore -Descending | Select-Object -First 5)) {
+        $cls = switch ($v.OverallRisk) { "Critical" { "c-red" }; "High" { "c-amber" }; "Medium" { "c-purple" }; "Low" { "c-green" }; default { "" } }
+        $icon = switch ($v.OverallRisk) { "Critical" { "🔴" }; "High" { "🟠" }; "Medium" { "🟣" }; "Low" { "🟢" }; default { "•" } }
         $topVaultsHtml += @"
-                    <div class="top-item">
-                        <div class="rank">$counter</div>
-                        <div class="item-name">$($vault.VaultName) <span style="font-size:11px;color:#7d8590;">($($vault.SubscriptionName))</span></div>
-                        <div class="item-count" style="color:$riskColor;font-weight:700;">$($vault.OverallRisk) / $($vault.RiskScore)</div>
-                    </div>
+          <div class="sub-row">
+            <span class="sub-icon $cls">$icon</span>
+            <span class="sub-name">$(EscHtml $v.VaultName)</span>
+            <span class="sub-detail">$(EscHtml $v.OverallRisk) — Score $($v.RiskScore) · $(EscHtml $v.SubscriptionName)</span>
+          </div>
 "@
-        $counter++
     }
 
-    # ── Findings table rows ──────────────────────────────────────────────────────
-    $findingsTableHtml = ""
-    foreach ($f in ($AllFindings | Sort-Object RiskScore -Descending)) {
-        $riskColor = $riskColors[$f.OverallRisk]
-        if (-not $riskColor) { $riskColor = "#7d8590" }
+    # ── Vault findings table rows ───────────────────────────────────────────────────
+    $findingRows = ""
+    $findingsSorted = @($AllFindings | Sort-Object RiskScore -Descending)
+    foreach ($f in $findingsSorted) {
+        $idx = $findingsSorted.IndexOf($f)
+        $failedCount = @($Script:KvControls | Where-Object { $f.($_.FailProperty) -eq $true }).Count
+        $paBadge = if ($f.PublicNetworkAccess -eq "Enabled") { '<span class="badge badge-amber">Enabled</span>' } else { '<span class="badge badge-green">Disabled</span>' }
+        $rbacBadge = if ($f.RBACEnabled) { '<span class="badge badge-green">RBAC</span>' } else { '<span class="badge badge-amber">Access Policy</span>' }
+        $findingRows += @"
+          <tr onclick="showVaultDetail($idx)">
+            <td title="$(EscHtml $f.VaultName)">$(if ($f.VaultName.Length -gt 32) { EscHtml($f.VaultName.Substring(0,29)+"...") } else { EscHtml $f.VaultName })</td>
+            <td>$(EscHtml $f.SubscriptionName)</td>
+            <td><span class="badge $($riskBadgeCls[$f.OverallRisk])">$(EscHtml $f.OverallRisk)</span></td>
+            <td style="text-align:center;font-family:var(--mono)">$($f.RiskScore)</td>
+            <td>$paBadge</td>
+            <td>$rbacBadge</td>
+            <td style="text-align:center;font-family:var(--mono)">$failedCount / 8</td>
+          </tr>
+"@
+    }
 
-        $cell = {
-            param($val)
-            if ($val -eq $true) {
-                '<span style="color:#f85149;font-weight:600;">FAIL</span>'
-            }
-            else {
-                '<span style="color:#3fb950;">PASS</span>'
-            }
+    # ── JSON for vault findings (table + detail drawer) ────────────────────────────
+    $findingsJson = "["
+    foreach ($f in $findingsSorted) {
+        $controlsJson = "["
+        foreach ($c in $Script:KvControls) {
+            $fail = if ($f.($c.FailProperty) -eq $true) { "true" } else { "false" }
+            $controlsJson += "{""n"":""$(EscJ $c.Name)"",""f"":$fail},"
         }
+        $controlsJson = $controlsJson.TrimEnd(",") + "]"
 
-        $findingsTableHtml += @"
-                    <tr>
-                        <td>$($f.VaultName)</td>
-                        <td style="font-size:11px;color:#7d8590;">$($f.SubscriptionName)</td>
-                        <td>$($f.ResourceGroup)</td>
-                        <td style="color:$riskColor;font-weight:700;">$($f.OverallRisk)</td>
-                        <td style="text-align:center;">$($f.RiskScore)</td>
-                        <td style="text-align:center;">$(& $cell $f.PublicAccessNoFirewall)</td>
-                        <td style="text-align:center;">$(& $cell $f.PurgeProtectionDisabled)</td>
-                        <td style="text-align:center;">$(& $cell $f.SoftDeleteWeak)</td>
-                        <td style="text-align:center;">$(& $cell $f.NoPrivateEndpoint)</td>
-                        <td style="text-align:center;">$(& $cell $f.AccessPolicyMode)</td>
-                        <td style="text-align:center;">$(& $cell $f.NoDiagnostics)</td>
-                        <td style="text-align:center;">$(& $cell $f.NoFirewallRules)</td>
-                        <td style="text-align:center;">$(& $cell $f.NoManagedIdentityRbac)</td>
-                    </tr>
-"@
-    }
+        $softDelText = if ($f.SoftDeleteEnabled) { "Enabled ($($f.SoftDeleteRetentionDays) days retention)" } else { "Disabled" }
 
-    # ── Output files section ─────────────────────────────────────────────────────
-    $outputFilesHtml = ""
-    if ($CsvPath) {
-        $outputFilesHtml += @"
-                    <div class="output-item">
-                        <div class="output-icon">✓</div>
-                        <div class="output-details">
-                            <div class="output-label">CSV Export</div>
-                            <div class="output-value">$CsvPath</div>
-                        </div>
-                    </div>
-"@
+        $findingsJson += "{" +
+        """name"":""$(EscJ $f.VaultName)""," +
+        """sub"":""$(EscJ $f.SubscriptionName)""," +
+        """rg"":""$(EscJ $f.ResourceGroup)""," +
+        """sku"":""$(EscJ $f.SKU)""," +
+        """loc"":""$(EscJ $f.Location)""," +
+        """risk"":""$(EscJ $f.OverallRisk)""," +
+        """score"":$($f.RiskScore)," +
+        """pubAccess"":""$(EscJ $f.PublicNetworkAccess)""," +
+        """fwCount"":$($f.FirewallRulesCount)," +
+        """peCount"":$($f.PrivateEndpointCount)," +
+        """purgeProt"":""$(if ($f.PurgeProtectionEnabled) { 'Enabled' } else { 'Disabled' })""," +
+        """softDel"":""$(EscJ $softDelText)""," +
+        """rbac"":""$(if ($f.RBACEnabled) { 'RBAC' } else { 'Access Policies' })""," +
+        """diag"":""$(if ($f.DiagnosticsEnabled) { 'Enabled' } else { 'Disabled' })""," +
+        """miRbac"":$($f.ManagedIdentityRbacCount)," +
+        """controls"":$controlsJson" +
+        "},"
     }
-    if ($HtmlPath) {
-        $outputFilesHtml += @"
-                    <div class="output-item">
-                        <div class="output-icon">✓</div>
-                        <div class="output-details">
-                            <div class="output-label">HTML Report</div>
-                            <div class="output-value">$HtmlPath</div>
-                        </div>
-                    </div>
-"@
-    }
-    if ($GridViewOpened) {
-        $outputFilesHtml += @"
-                    <div class="output-item">
-                        <div class="output-icon">✓</div>
-                        <div class="output-details">
-                            <div class="output-label">Grid View</div>
-                            <div class="output-value">Opened in separate window</div>
-                        </div>
-                    </div>
+    $findingsJson = $findingsJson.TrimEnd(",") + "]"
+
+    # ── Subscription results rows ───────────────────────────────────────────────────
+    $subRows = ""
+    foreach ($s in $SubscriptionResults) {
+        $icon = switch ($s.Status) { "Success" { "✓" }; "Warning" { "⚠" }; "Error" { "✗" }; default { "•" } }
+        $cls = switch ($s.Status) { "Success" { "c-green" }; "Warning" { "c-amber" }; "Error" { "c-red" }; default { "" } }
+        $subRows += @"
+          <div class="sub-row">
+            <span class="sub-icon $cls">$icon</span>
+            <span class="sub-name">$(EscHtml $s.Name)</span>
+            <span class="sub-detail">$(EscHtml $s.Count)</span>
+          </div>
 "@
     }
 
-    # ── Full HTML ────────────────────────────────────────────────────────────────
-    $html = @"
+    $html = @'
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Azure Key Vault Security Assessment - Execution Report</title>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
-    <style>
-        :root {
-            --bg:#0d1117; --surface:#161b22; --surface2:#1c2333; --surface3:#243048;
-            --border:#30363d; --accent:#388bfd; --accent2:#39c5cf; --accent3:#a371f7;
-            --green:#3fb950; --amber:#d29922; --red:#f85149;
-            --text:#e6edf3; --muted:#7d8590; --muted2:#adbac7;
-            --mono:'JetBrains Mono','Consolas','Courier New',monospace;
-            --sans:'Calibri','Segoe UI',Tahoma,Geneva,sans-serif;
-            --radius:10px; --radius-sm:6px; --shadow:0 4px 24px rgba(0,0,0,.5);
-        }
-        body.light-theme {
-            --bg:#f6f8fa; --surface:#fff; --surface2:#f0f3f6; --surface3:#e4e9ef;
-            --border:#d0d7de; --accent:#0969da; --accent2:#0284a8; --accent3:#7c3aed;
-            --green:#1a7f37; --amber:#b08000; --red:#cf222e;
-            --text:#1f2328; --muted:#636c76; --muted2:#424a53;
-            --shadow:0 4px 24px rgba(0,0,0,.12);
-        }
-        *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
-        html { scroll-behavior:smooth; }
-        body { font-family:var(--sans); background:var(--bg); color:var(--text); font-size:15px; line-height:1.6; min-height:100vh; transition:background .25s,color .25s; }
-        .theme-btn { position:fixed; top:14px; right:18px; z-index:200; background:var(--surface2); border:1px solid var(--border); color:var(--muted2); font-family:var(--sans); font-size:12px; padding:6px 14px; border-radius:20px; cursor:pointer; transition:all .2s; }
-        .theme-btn:hover { border-color:var(--accent); color:var(--accent); }
-        .container { max-width:1400px; margin:0 auto; background:var(--surface); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; border:1px solid var(--border); }
-        .header { background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 100%); color:#fff; padding:40px; text-align:center; }
-        .header h1 { font-size:28px; margin-bottom:8px; font-weight:300; letter-spacing:1px; }
-        .header .timestamp { font-size:13px; opacity:0.85; font-family:var(--mono); }
-        .content { padding:28px 32px; }
-        .section { margin-bottom:28px; }
-        .section-title { font-size:18px; color:var(--accent); margin-bottom:18px; padding-bottom:8px; border-bottom:1px solid var(--border); font-weight:600; }
-        .info-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-bottom:16px; }
-        .info-card { background:var(--surface2); padding:18px; border-radius:var(--radius-sm); border-left:4px solid var(--accent); }
-        .info-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
-        .info-value { font-size:15px; color:var(--text); font-weight:600; word-break:break-all; font-family:var(--mono); }
-        .info-value.none { color:var(--muted); font-style:italic; }
-        .stats-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
-        .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:15px 17px; position:relative; overflow:hidden; transition:transform .2s,border-color .2s; }
-        .stat-card:hover { transform:translateY(-2px); border-color:var(--accent); }
-        .stat-card.blue   { border-top:2px solid var(--accent); }
-        .stat-card.red    { border-top:2px solid var(--red); }
-        .stat-card.amber  { border-top:2px solid var(--amber); }
-        .stat-card.green  { border-top:2px solid var(--green); }
-        .stat-card.purple { border-top:2px solid var(--accent3); }
-        .stat-number { font-size:25px; font-weight:700; color:var(--text); line-height:1; margin-bottom:4px; font-family:var(--mono); }
-        .stat-label  { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-top:4px; }
-        .subscription-list { background:var(--surface2); padding:18px; border-radius:var(--radius-sm); max-height:380px; overflow-y:auto; border:1px solid var(--border); }
-        .subscription-item { display:flex; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); }
-        .subscription-item:last-child { border-bottom:none; }
-        .status-icon { width:22px; margin-right:14px; font-size:16px; }
-        .subscription-name { flex:1; font-weight:500; color:var(--text); }
-        .assignment-count { color:var(--accent); font-weight:600; font-size:13px; font-family:var(--mono); }
-        .top-list { background:var(--surface2); padding:18px; border-radius:var(--radius-sm); border:1px solid var(--border); }
-        .top-item { display:flex; align-items:center; padding:12px; margin-bottom:8px; background:var(--surface); border-radius:var(--radius-sm); border:1px solid var(--border); transition:border-color .2s; }
-        .top-item:last-child { margin-bottom:0; }
-        .top-item:hover { border-color:var(--accent); }
-        .rank { width:30px; height:30px; background:linear-gradient(135deg,var(--accent),var(--accent3)); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; margin-right:14px; font-size:13px; flex-shrink:0; font-family:var(--mono); }
-        .item-name { flex:1; font-weight:500; color:var(--text); font-size:13px; }
-        .item-count { color:var(--accent2); font-weight:600; font-size:13px; white-space:nowrap; font-family:var(--mono); }
-        .distribution { background:var(--surface2); padding:18px; border-radius:var(--radius-sm); border:1px solid var(--border); }
-        .distribution-item { margin-bottom:18px; }
-        .distribution-item:last-child { margin-bottom:0; }
-        .distribution-label { display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px; color:var(--text); }
-        .distribution-bar { height:8px; background:var(--surface3); border-radius:4px; overflow:hidden; }
-        .distribution-fill { height:100%; border-radius:4px; }
-        .two-col { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-        .table-wrap { overflow-x:auto; background:var(--surface2); border-radius:var(--radius-sm); border:1px solid var(--border); }
-        table { width:100%; border-collapse:collapse; font-size:12px; }
-        th { background:var(--accent); color:#fff; padding:10px 12px; text-align:left; white-space:nowrap; font-weight:600; letter-spacing:.05em; font-family:var(--sans); }
-        td { padding:8px 12px; border-bottom:1px solid var(--border); color:var(--text); vertical-align:middle; }
-        tr:last-child td { border-bottom:none; }
-        tr:hover td { background:var(--surface3); }
-        .output-section { background:var(--surface2); padding:18px; border-radius:var(--radius-sm); border:1px solid var(--border); }
-        .output-item { display:flex; align-items:center; padding:12px; margin-bottom:8px; background:var(--surface); border-radius:var(--radius-sm); border:1px solid var(--border); }
-        .output-item:last-child { margin-bottom:0; }
-        .output-icon { width:38px; height:38px; background:var(--green); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:14px; font-size:18px; flex-shrink:0; }
-        .output-details { flex:1; }
-        .output-label { font-size:11px; color:var(--muted); margin-bottom:3px; text-transform:uppercase; letter-spacing:.05em; }
-        .output-value { font-weight:600; color:var(--text); word-break:break-all; font-size:13px; font-family:var(--mono); }
-        .footer { background:var(--bg); padding:18px; text-align:center; color:var(--muted); font-size:12px; border-top:1px solid var(--border); font-family:var(--mono); }
-        @keyframes fadeIn { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
-        .content { animation:fadeIn .22s ease; }
-        @media (max-width:900px) { .two-col { grid-template-columns:1fr; } }
-        @media (max-width:768px) { .content { padding:16px; } .stat-number { font-size:20px; } }
-        @media print { body { background:white; } .container { box-shadow:none; } .theme-btn { display:none; } }
-    </style>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Azure Key Vault Security Assessment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#0d1117;--surface:#161b22;--surface2:#1c2333;--surface3:#243048;
+  --border:#30363d;--accent:#388bfd;--accent2:#39c5cf;--accent3:#a371f7;
+  --green:#3fb950;--amber:#d29922;--red:#f85149;
+  --text:#e6edf3;--muted:#7d8590;--muted2:#adbac7;
+  --mono:'JetBrains Mono','Consolas','Courier New',monospace;
+  --sans:'Calibri','Segoe UI',Tahoma,Geneva,sans-serif;
+  --radius:10px;--radius-sm:6px;--shadow:0 4px 24px rgba(0,0,0,.5);
+}
+html[data-theme="light"]{
+  --bg:#f6f8fa;--surface:#fff;--surface2:#f0f3f6;--surface3:#e4e9ef;
+  --border:#d0d7de;--accent:#0969da;--accent2:#0284a8;--accent3:#7c3aed;
+  --green:#1a7f37;--amber:#b08000;--red:#cf222e;
+  --text:#1f2328;--muted:#636c76;--muted2:#424a53;
+  --shadow:0 4px 24px rgba(0,0,0,.12);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;display:flex;}
+#sidebar{
+  width:240px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;position:fixed;left:0;top:0;bottom:0;z-index:100;
+  transition:transform .25s;
+}
+.logo-block{padding:22px 18px 16px;border-bottom:1px solid var(--border);}
+.logo-icon{width:38px;height:38px;border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:10px;}
+.logo-title{font-size:13px;font-weight:700;color:var(--text);line-height:1.3;}
+.logo-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+.version-badge{
+  display:inline-block;margin-top:8px;padding:2px 8px;border-radius:20px;
+  font-size:10px;font-family:var(--mono);background:var(--surface3);color:var(--accent);border:1px solid var(--border);
+}
+.nav-section{padding:14px 10px;flex:1;}
+.nav-label{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.08em;padding:0 8px;margin-bottom:6px;}
+.nav-btn{
+  display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:none;
+  background:transparent;color:var(--muted2);font-size:13px;border-radius:var(--radius-sm);
+  cursor:pointer;text-align:left;transition:background .15s,color .15s;position:relative;margin-bottom:2px;
+}
+.nav-btn:hover{background:var(--surface2);color:var(--text);}
+.nav-btn.active{background:var(--surface3);color:var(--accent);font-weight:600;}
+.nav-btn.active::before{
+  content:'';position:absolute;left:0;top:20%;bottom:20%;width:3px;
+  background:var(--accent);border-radius:0 3px 3px 0;
+}
+.nav-icon{font-size:16px;width:20px;text-align:center;}
+.sidebar-footer{padding:14px 16px;border-top:1px solid var(--border);}
+.theme-toggle{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:10px;}
+.toggle-pill{
+  width:40px;height:22px;border-radius:11px;border:none;cursor:pointer;
+  background:var(--surface3);position:relative;transition:background .2s;
+}
+.toggle-pill::after{
+  content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;
+  border-radius:50%;background:var(--accent);transition:transform .2s;
+}
+html[data-theme="light"] .toggle-pill::after{transform:translateX(18px);}
+.footer-meta{font-size:10px;color:var(--muted);line-height:1.6;}
+#main{margin-left:240px;padding:28px;width:calc(100% - 240px);min-height:100vh;}
+.page{display:none;animation:fadeIn .2s ease;}
+.page.active{display:block;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+.page-header{margin-bottom:22px;}
+.page-title{font-size:22px;font-weight:700;}
+.page-sub{font-size:13px;color:var(--muted);margin-top:4px;}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px;}
+.stat-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px 16px;border-top:3px solid;transition:transform .15s,box-shadow .15s;cursor:default;
+}
+.stat-card:hover{transform:translateY(-2px);box-shadow:var(--shadow);}
+.stat-card.c-blue{border-top-color:var(--accent);}
+.stat-card.c-cyan{border-top-color:var(--accent2);}
+.stat-card.c-purple{border-top-color:var(--accent3);}
+.stat-card.c-green{border-top-color:var(--green);}
+.stat-card.c-amber{border-top-color:var(--amber);}
+.stat-card.c-red{border-top-color:var(--red);}
+.stat-num{font-size:30px;font-weight:700;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:11px;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.05em;}
+.stat-sub{font-size:11px;color:var(--muted2);margin-top:4px;}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:18px;}
+.panel-title{font-size:14px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px;}
+.bar-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);}
+.bar-row:last-child{border-bottom:none;}
+.bar-label{font-size:12px;color:var(--muted2);width:170px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bar-track{flex:1;height:8px;background:var(--surface3);border-radius:4px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:4px;background:var(--accent);width:0;transition:width .8s ease;}
+.bar-pct{font-size:12px;font-family:var(--mono);color:var(--muted2);width:90px;text-align:right;flex-shrink:0;}
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+.search-wrap{position:relative;flex:1;min-width:200px;}
+.search-wrap input{
+  width:100%;padding:8px 12px 8px 34px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  color:var(--text);font-size:13px;outline:none;
+}
+.search-wrap input:focus{border-color:var(--accent);}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;}
+.filter-select{
+  padding:7px 10px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);color:var(--text);font-size:12px;cursor:pointer;
+}
+.tbl-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th{
+  padding:10px 12px;text-align:left;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  background:var(--surface2);border-bottom:1px solid var(--border);
+  cursor:pointer;white-space:nowrap;user-select:none;
+}
+th:hover{color:var(--text);}
+td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tr:hover td{background:var(--surface2);cursor:pointer;}
+.pagination{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--muted);flex-wrap:wrap;}
+.pg-btn{padding:4px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);cursor:pointer;font-size:12px;}
+.pg-btn:hover{border-color:var(--accent);color:var(--accent);}
+.pg-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.pg-btn:disabled{opacity:.4;cursor:not-allowed;}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;}
+.badge-green{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);}
+.badge-amber{background:rgba(210,153,34,.15);color:var(--amber);border:1px solid rgba(210,153,34,.3);}
+.badge-red{background:rgba(248,81,73,.15);color:var(--red);border:1px solid rgba(248,81,73,.3);}
+.badge-blue{background:rgba(56,139,253,.15);color:var(--accent);border:1px solid rgba(56,139,253,.3);}
+.badge-purple{background:rgba(163,113,247,.15);color:var(--accent3);border:1px solid rgba(163,113,247,.3);}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;}
+.info-card{background:var(--surface2);border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--border);}
+.info-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}
+.info-value{font-size:13px;font-family:var(--mono);word-break:break-all;}
+.info-value.muted{color:var(--muted);font-style:italic;}
+.sub-list{display:flex;flex-direction:column;}
+.sub-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);}
+.sub-row:last-child{border-bottom:none;}
+.sub-icon{font-size:16px;width:22px;text-align:center;}
+.sub-icon.c-green{color:var(--green);}
+.sub-icon.c-amber{color:var(--amber);}
+.sub-icon.c-red{color:var(--red);}
+.sub-icon.c-purple{color:var(--accent3);}
+.sub-name{flex:1;font-size:13px;font-weight:500;}
+.sub-detail{font-size:12px;color:var(--muted2);font-family:var(--mono);}
+#drawerBackdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;}
+#detailDrawer{
+  position:fixed;right:0;top:0;bottom:0;width:440px;max-width:95vw;
+  background:var(--surface);border-left:1px solid var(--border);
+  z-index:201;display:flex;flex-direction:column;
+  transform:translateX(100%);transition:transform .25s ease;overflow:hidden;
+}
+#detailDrawer.open{transform:translateX(0);}
+.drawer-header{padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.drawer-title{font-size:13px;font-weight:700;word-break:break-word;}
+.drawer-close{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:2px 6px;border-radius:var(--radius-sm);}
+.drawer-close:hover{color:var(--text);background:var(--surface2);}
+.drawer-body{padding:20px;overflow-y:auto;flex:1;}
+.drawer-nav{display:flex;gap:8px;align-items:center;margin-bottom:16px;}
+.drawer-nav-btn{padding:5px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);cursor:pointer;font-size:12px;}
+.drawer-nav-btn:hover{border-color:var(--accent);color:var(--accent);}
+.drawer-nav-info{font-size:12px;color:var(--muted);flex:1;text-align:center;}
+.drawer-field{margin-bottom:14px;}
+.drawer-field-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}
+.drawer-field-value{font-size:13px;word-break:break-all;}
+.drawer-section{font-size:11px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px;border-top:1px solid var(--border);padding-top:14px;}
+.ctrl-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;}
+.ctrl-row:last-child{border-bottom:none;}
+#toast{
+  position:fixed;bottom:24px;right:24px;padding:12px 18px;
+  background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+  font-size:13px;box-shadow:var(--shadow);
+  opacity:0;transform:translateY(10px);transition:opacity .2s,transform .2s;pointer-events:none;z-index:300;
+}
+#toast.show{opacity:1;transform:translateY(0);}
+#menuToggle{display:none;}
+@media(max-width:768px){
+  #menuToggle{display:flex;align-items:center;justify-content:center;position:fixed;top:12px;left:12px;z-index:300;width:36px;height:36px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:18px;}
+  #sidebar{transform:translateX(-100%);}
+  #sidebar.open{transform:translateX(0);}
+  #main{margin-left:0;width:100%;padding:16px;padding-top:56px;}
+  .chart-grid{grid-template-columns:1fr;}
+}
+@media print{
+  #sidebar,#menuToggle,#toast,#drawerBackdrop,#detailDrawer{display:none!important;}
+  #main{margin-left:0;width:100%;}
+  .page{display:block!important;}
+}
+</style>
 </head>
 <body>
-    <button class="theme-btn" onclick="document.body.classList.toggle('light-theme')">☀ / 🌙 Theme</button>
-    <div class="container">
 
-        <div class="header">
-            <h1>🔐 Azure Key Vault Security Assessment</h1>
-            <div class="timestamp">Execution Report — Generated on $timestamp</div>
+<button id="menuToggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+
+<nav id="sidebar">
+  <div class="logo-block">
+    <div class="logo-icon">🔐</div>
+    <div class="logo-title">Key Vault Security</div>
+    <div class="logo-sub">Azure Key Vault Assessment</div>
+    <div class="version-badge">v1.0</div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Navigation</div>
+    <button class="nav-btn active" onclick="showPage('overview',this)"><span class="nav-icon">📊</span> Overview</button>
+    <button class="nav-btn" onclick="showPage('findings',this)"><span class="nav-icon">🔑</span> Vault Findings</button>
+    <button class="nav-btn" onclick="showPage('controls',this)"><span class="nav-icon">🎯</span> Risk & Controls</button>
+    <button class="nav-btn" onclick="showPage('subscriptions',this)"><span class="nav-icon">🔍</span> Scan Results</button>
+    <button class="nav-btn" onclick="showPage('session',this)"><span class="nav-icon">⚙️</span> Session Info</button>
+  </div>
+  <div class="sidebar-footer">
+    <div class="theme-toggle">
+      <span>Dark mode</span>
+      <button class="toggle-pill" onclick="toggleTheme()"></button>
+    </div>
+    <div class="footer-meta">
+      Generated: __GENERATED_ON__<br/>
+      Azure Key Vault Security Assessment
+    </div>
+  </div>
+</nav>
+
+<main id="main">
+
+  <!-- Overview -->
+  <div id="page-overview" class="page active">
+    <div class="page-header">
+      <div class="page-title">Key Vault Security Overview</div>
+      <div class="page-sub">Vault security posture across __SUB_COUNT__ subscription(s)</div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card c-blue">
+        <div class="stat-num">__TOTAL_VAULTS__</div>
+        <div class="stat-label">Vaults Assessed</div>
+      </div>
+      <div class="stat-card c-red">
+        <div class="stat-num">__CRITICAL_COUNT__</div>
+        <div class="stat-label">Critical Risk</div>
+      </div>
+      <div class="stat-card c-amber">
+        <div class="stat-num">__HIGH_COUNT__</div>
+        <div class="stat-label">High Risk</div>
+      </div>
+      <div class="stat-card c-purple">
+        <div class="stat-num">__MEDIUM_COUNT__</div>
+        <div class="stat-label">Medium Risk</div>
+      </div>
+      <div class="stat-card c-green">
+        <div class="stat-num">__LOW_COUNT__</div>
+        <div class="stat-label">Low Risk</div>
+      </div>
+      <div class="stat-card c-cyan">
+        <div class="stat-num">__SUB_COUNT__</div>
+        <div class="stat-label">Subscriptions</div>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="panel">
+        <div class="panel-title">🎯 Risk Rating Distribution</div>
+        __RISK_ROWS__
+      </div>
+      <div class="panel">
+        <div class="panel-title">⚠️ Most Frequently Failed Controls</div>
+        __CONTROL_ROWS_TOP__
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">🔴 Top 5 Highest Risk Vaults</div>
+      <div class="sub-list">__TOP_VAULTS__</div>
+    </div>
+  </div>
+
+  <!-- Vault Findings -->
+  <div id="page-findings" class="page">
+    <div class="page-header">
+      <div class="page-title">Vault Findings</div>
+      <div class="page-sub">Click any row for the full control breakdown. Sorted by risk score, highest first.</div>
+    </div>
+    <div class="panel">
+      <div class="toolbar">
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="vaultSearch" placeholder="Search vault, subscription…" oninput="filterVaults()"/>
         </div>
+        <select class="filter-select" id="filterRisk" onchange="filterVaults()">
+          <option value="">All Risk Ratings</option>
+          <option value="Critical">Critical</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+        <select class="filter-select" id="pgSizeVault" onchange="changeVaultPageSize()">
+          <option value="25">25 / page</option>
+          <option value="50">50 / page</option>
+          <option value="100">100 / page</option>
+        </select>
+      </div>
+      <div class="tbl-wrap">
+        <table id="vaultTable">
+          <thead>
+            <tr>
+              <th onclick="sortVaults(0)">Vault Name</th>
+              <th onclick="sortVaults(1)">Subscription</th>
+              <th onclick="sortVaults(2)">Risk Rating</th>
+              <th onclick="sortVaults(3)">Score</th>
+              <th onclick="sortVaults(4)">Public Access</th>
+              <th onclick="sortVaults(5)">Access Model</th>
+              <th onclick="sortVaults(6)">Failed Controls</th>
+            </tr>
+          </thead>
+          <tbody id="vaultBody">__FINDING_ROWS__</tbody>
+        </table>
+      </div>
+      <div class="pagination" id="vaultPagination"></div>
+    </div>
+  </div>
 
-        <div class="content">
+  <!-- Risk & Controls -->
+  <div id="page-controls" class="page">
+    <div class="page-header">
+      <div class="page-title">Risk & Control Analysis</div>
+      <div class="page-sub">Full distribution of risk ratings and every control's fail rate across all assessed vaults</div>
+    </div>
+    <div class="chart-grid">
+      <div class="panel">
+        <div class="panel-title">🎯 Risk Rating Distribution</div>
+        __RISK_ROWS_2__
+      </div>
+      <div class="panel">
+        <div class="panel-title">🛡️ Control Fail Counts (all 8)</div>
+        __CONTROL_ROWS_FULL__
+      </div>
+    </div>
+  </div>
 
-            <!-- Session Information -->
-            <div class="section">
-                <h2 class="section-title">📋 Session Information</h2>
-                <div class="info-grid">
-                    <div class="info-card">
-                        <div class="info-label">Tenant ID</div>
-                        <div class="info-value">$($SessionInfo.Tenant)</div>
-                    </div>
-                    <div class="info-card">
-                        <div class="info-label">Account</div>
-                        <div class="info-value">$($SessionInfo.Account)</div>
-                    </div>
-                    <div class="info-card">
-                        <div class="info-label">Environment</div>
-                        <div class="info-value">$($SessionInfo.Environment)</div>
-                    </div>
-                </div>
-            </div>
+  <!-- Scan Results -->
+  <div id="page-subscriptions" class="page">
+    <div class="page-header">
+      <div class="page-title">Subscription Scan Results</div>
+      <div class="page-sub">Per-subscription vault assessment outcome</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">📋 Subscriptions Scanned</div>
+      <div class="sub-list">__SUB_ROWS__</div>
+    </div>
+  </div>
 
-            <!-- Scan Parameters -->
-            <div class="section">
-                <h2 class="section-title">⚙️ Scan Parameters</h2>
-                <div class="info-grid">
-                    <div class="info-card">
-                        <div class="info-label">Scope</div>
-                        <div class="info-value">$($ScanParameters.Scope)</div>
-                    </div>
-                    <div class="info-card">
-                        <div class="info-label">CSV Export</div>
-                        <div class="info-value">$($ScanParameters.ExportEnabled)</div>
-                    </div>
-                    <div class="info-card">
-                        <div class="info-label">Export Path</div>
-                        <div class="info-value$(if ([string]::IsNullOrWhiteSpace($ScanParameters.ExportPath)) { ' none' })">$(if ($ScanParameters.ExportPath) { $ScanParameters.ExportPath } else { 'N/A' })</div>
-                    </div>
-                </div>
-            </div>
+  <!-- Session -->
+  <div id="page-session" class="page">
+    <div class="page-header">
+      <div class="page-title">Session &amp; Scan Parameters</div>
+      <div class="page-sub">Authentication context and configuration used for this assessment</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">🔐 Session Information</div>
+      <div class="info-grid">
+        <div class="info-card"><div class="info-label">Tenant ID</div><div class="info-value">__TENANT__</div></div>
+        <div class="info-card"><div class="info-label">Account</div><div class="info-value">__ACCOUNT__</div></div>
+        <div class="info-card"><div class="info-label">Environment</div><div class="info-value">__ENVIRONMENT__</div></div>
+        <div class="info-card"><div class="info-label">Generated On</div><div class="info-value">__GENERATED_ON__</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">⚙️ Scan Parameters</div>
+      <div class="info-grid">
+        <div class="info-card"><div class="info-label">Scope</div><div class="info-value">__SCOPE__</div></div>
+        <div class="info-card"><div class="info-label">CSV Export</div><div class="info-value">__EXPORT_ENABLED__</div></div>
+        <div class="info-card"><div class="info-label">Export Path</div><div class="info-value__EXPORT_PATH_CLS__">__EXPORT_PATH__</div></div>
+        <div class="info-card"><div class="info-label">Execution Time</div><div class="info-value">__EXEC_TIME__</div></div>
+        <div class="info-card"><div class="info-label">Subscriptions Scanned</div><div class="info-value">__SUB_COUNT__</div></div>
+      </div>
+    </div>
+  </div>
+</main>
 
-            <!-- Summary Statistics -->
-            <div class="section">
-                <h2 class="section-title">📊 Scan Summary</h2>
-                <div class="stats-grid">
-                    <div class="stat-card blue">
-                        <div class="stat-number">$($ScanSummary.TotalVaults)</div>
-                        <div class="stat-label">Vaults Assessed</div>
-                    </div>
-                    <div class="stat-card red">
-                        <div class="stat-number">$(if ($RiskDistribution.ContainsKey('Critical')) { $RiskDistribution['Critical'] } else { 0 })</div>
-                        <div class="stat-label">Critical Risk</div>
-                    </div>
-                    <div class="stat-card amber">
-                        <div class="stat-number">$(if ($RiskDistribution.ContainsKey('High')) { $RiskDistribution['High'] } else { 0 })</div>
-                        <div class="stat-label">High Risk</div>
-                    </div>
-                    <div class="stat-card green">
-                        <div class="stat-number">$(if ($RiskDistribution.ContainsKey('Low')) { $RiskDistribution['Low'] } else { 0 })</div>
-                        <div class="stat-label">Low Risk</div>
-                    </div>
-                    <div class="stat-card purple">
-                        <div class="stat-number">$($ScanSummary.SubscriptionsScanned)</div>
-                        <div class="stat-label">Subscriptions</div>
-                    </div>
-                    <div class="stat-card blue">
-                        <div class="stat-number">$($ScanSummary.ExecutionTime)</div>
-                        <div class="stat-label">Execution Time</div>
-                    </div>
-                </div>
-            </div>
+<!-- Detail Drawer -->
+<div id="drawerBackdrop" onclick="closeDrawer()"></div>
+<div id="detailDrawer">
+  <div class="drawer-header">
+    <span class="drawer-title" id="drawerTitle">Vault Detail</span>
+    <button class="drawer-close" onclick="closeDrawer()">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="drawer-nav">
+      <button class="drawer-nav-btn" onclick="navDetail(-1)">← Prev</button>
+      <span class="drawer-nav-info" id="drawerNavInfo"></span>
+      <button class="drawer-nav-btn" onclick="navDetail(1)">Next →</button>
+    </div>
+    <div id="drawerContent"></div>
+  </div>
+</div>
 
-            <!-- Risk Distribution + Top Failed Controls -->
-            <div class="section">
-                <h2 class="section-title">🎯 Risk & Control Analysis</h2>
-                <div class="two-col">
-                    <div>
-                        <div class="section-title" style="font-size:14px;margin-bottom:12px;">Risk Rating Distribution</div>
-                        <div class="distribution">
-                            $riskDistributionHtml
-                        </div>
-                    </div>
-                    <div>
-                        <div class="section-title" style="font-size:14px;margin-bottom:12px;">Most Frequently Failed Controls</div>
-                        <div class="top-list">
-                            $topControlsHtml
-                        </div>
-                    </div>
-                </div>
-            </div>
+<div id="toast"></div>
 
-            <!-- Top 5 Riskiest Vaults -->
-            <div class="section">
-                <h2 class="section-title">🔴 Top 5 Highest Risk Vaults</h2>
-                <div class="top-list">
-                    $topVaultsHtml
-                </div>
-            </div>
+<script>
+const VAULT_DATA = __FINDINGS_JSON__;
+let vaultFiltered = [...VAULT_DATA];
+let vaultPage = 1, vaultPageSz = 25;
+let vaultSortCol = -1, vaultSortAsc = true;
+let currentDetailIdx = 0;
 
-            <!-- Subscription Results -->
-            <div class="section">
-                <h2 class="section-title">🗂️ Subscription Results</h2>
-                <div class="subscription-list">
-                    $subscriptionHtml
-                </div>
-            </div>
+function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-            <!-- Full Findings Table -->
-            <div class="section">
-                <h2 class="section-title">📋 Full Vault Findings</h2>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Vault Name</th>
-                                <th>Subscription</th>
-                                <th>Resource Group</th>
-                                <th>Risk Rating</th>
-                                <th>Score</th>
-                                <th>Public Access</th>
-                                <th>Purge Prot.</th>
-                                <th>Soft Delete</th>
-                                <th>Private EP</th>
-                                <th>Access Policy</th>
-                                <th>Diagnostics</th>
-                                <th>Firewall</th>
-                                <th>MI RBAC</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            $findingsTableHtml
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+function showPage(id,btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  btn.classList.add('active');
+  document.getElementById('sidebar').classList.remove('open');
+}
 
-            <!-- Output Files -->
-            <div class="section">
-                <h2 class="section-title">💾 Output Files</h2>
-                <div class="output-section">
-                    $outputFilesHtml
-                </div>
-            </div>
+function toggleTheme(){
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme==='dark'?'light':'dark';
+}
 
-        </div><!-- /content -->
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
 
-        <div class="footer">
-            Generated by Azure Key Vault Security Assessment v1.0 &nbsp;|&nbsp;
-            Controls aligned to CIS Azure Benchmark v2.0 &amp; Microsoft Defender for Cloud &nbsp;|&nbsp;
-            PowerShell Script
-        </div>
+// ── Vault findings table ────────────────────────────────────────────────────────
+const riskBadgeCls = {Critical:'badge-red',High:'badge-amber',Medium:'badge-purple',Low:'badge-green'};
 
-    </div><!-- /container -->
+function filterVaults(){
+  const q=document.getElementById('vaultSearch').value.toLowerCase();
+  const r=document.getElementById('filterRisk').value;
+  vaultFiltered=VAULT_DATA.filter(v=>{
+    const mQ=!q||JSON.stringify(v).toLowerCase().includes(q);
+    const mR=!r||v.risk===r;
+    return mQ&&mR;
+  });
+  vaultPage=1; renderVaults();
+}
+
+function changeVaultPageSize(){
+  vaultPageSz=parseInt(document.getElementById('pgSizeVault').value);
+  vaultPage=1; renderVaults();
+}
+
+function sortVaults(col){
+  if(vaultSortCol===col){vaultSortAsc=!vaultSortAsc;}else{vaultSortCol=col;vaultSortAsc=true;}
+  const keys=['name','sub','risk','score','pubAccess','rbac','failedCount'];
+  vaultFiltered.sort((a,b)=>{
+    const k=keys[col];
+    const av=k==='failedCount'?a.controls.filter(c=>c.f).length:(a[k]??'');
+    const bv=k==='failedCount'?b.controls.filter(c=>c.f).length:(b[k]??'');
+    return vaultSortAsc?String(av).localeCompare(String(bv),undefined,{numeric:true})
+                       :String(bv).localeCompare(String(av),undefined,{numeric:true});
+  });
+  renderVaults();
+}
+
+function renderVaults(){
+  const tbody=document.getElementById('vaultBody');
+  const start=(vaultPage-1)*vaultPageSz;
+  const slice=vaultFiltered.slice(start,start+vaultPageSz);
+  tbody.innerHTML=slice.map(v=>{
+    const gi=VAULT_DATA.indexOf(v);
+    const nm=v.name.length>32?v.name.substring(0,29)+'...':v.name;
+    const failedCount=v.controls.filter(c=>c.f).length;
+    const paBadge=v.pubAccess==='Enabled'?'<span class="badge badge-amber">Enabled</span>':'<span class="badge badge-green">Disabled</span>';
+    const rbacBadge=v.rbac==='RBAC'?'<span class="badge badge-green">RBAC</span>':'<span class="badge badge-amber">Access Policy</span>';
+    return `<tr onclick="showVaultDetail(${gi})">
+      <td title="${escH(v.name)}">${escH(nm)}</td>
+      <td>${escH(v.sub)}</td>
+      <td><span class="badge ${riskBadgeCls[v.risk]||''}">${escH(v.risk)}</span></td>
+      <td style="text-align:center;font-family:var(--mono)">${v.score}</td>
+      <td>${paBadge}</td>
+      <td>${rbacBadge}</td>
+      <td style="text-align:center;font-family:var(--mono)">${failedCount} / 8</td>
+    </tr>`;
+  }).join('');
+  renderVaultPg();
+}
+
+function renderVaultPg(){
+  const total=Math.ceil(vaultFiltered.length/vaultPageSz);
+  const el=document.getElementById('vaultPagination');
+  let h=`<span>${vaultFiltered.length} vaults</span>`;
+  h+=`<button class="pg-btn" onclick="changeVaultPage(${vaultPage-1})" ${vaultPage<=1?'disabled':''}>‹ Prev</button>`;
+  const s=Math.max(1,vaultPage-2),e=Math.min(total,s+4);
+  for(let p=s;p<=e;p++) h+=`<button class="pg-btn ${p===vaultPage?'active':''}" onclick="changeVaultPage(${p})">${p}</button>`;
+  h+=`<button class="pg-btn" onclick="changeVaultPage(${vaultPage+1})" ${vaultPage>=total?'disabled':''}>Next ›</button>`;
+  el.innerHTML=h;
+}
+
+function changeVaultPage(p){
+  const total=Math.ceil(vaultFiltered.length/vaultPageSz);
+  if(p<1||p>total)return;
+  vaultPage=p; renderVaults();
+}
+
+// ── Vault detail drawer ─────────────────────────────────────────────────────────
+function showVaultDetail(idx){
+  currentDetailIdx=idx;
+  const v=VAULT_DATA[idx];
+  if(!v)return;
+  document.getElementById('drawerTitle').textContent=v.name;
+  document.getElementById('drawerNavInfo').textContent=`${idx+1} of ${VAULT_DATA.length}`;
+  const ctrlRows=v.controls.map(c=>`
+    <div class="ctrl-row">
+      <span>${escH(c.n)}</span>
+      <span class="badge ${c.f?'badge-red':'badge-green'}">${c.f?'FAIL':'PASS'}</span>
+    </div>`).join('');
+  document.getElementById('drawerContent').innerHTML=`
+    <div class="drawer-field"><div class="drawer-field-label">Risk Rating</div>
+      <div class="drawer-field-value"><span class="badge ${riskBadgeCls[v.risk]||''}">${escH(v.risk)}</span> — Score ${v.score}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Subscription</div>
+      <div class="drawer-field-value">${escH(v.sub)}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Resource Group</div>
+      <div class="drawer-field-value">${escH(v.rg)}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Location / SKU</div>
+      <div class="drawer-field-value">${escH(v.loc)} · ${escH(v.sku)}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Public Network Access</div>
+      <div class="drawer-field-value">${escH(v.pubAccess)} (${v.fwCount} firewall rule(s), ${v.peCount} private endpoint(s))</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Access Model</div>
+      <div class="drawer-field-value">${escH(v.rbac)}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Purge Protection / Soft Delete</div>
+      <div class="drawer-field-value">${escH(v.purgeProt)} / ${escH(v.softDel)}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Diagnostic Logging</div>
+      <div class="drawer-field-value">${escH(v.diag)}</div></div>
+    <div class="drawer-field"><div class="drawer-field-label">Managed Identity RBAC Assignments</div>
+      <div class="drawer-field-value">${v.miRbac}</div></div>
+    <div class="drawer-section">Control Breakdown</div>
+    ${ctrlRows}
+  `;
+  document.getElementById('drawerBackdrop').style.display='block';
+  document.getElementById('detailDrawer').classList.add('open');
+}
+
+function closeDrawer(){
+  document.getElementById('drawerBackdrop').style.display='none';
+  document.getElementById('detailDrawer').classList.remove('open');
+}
+
+function navDetail(dir){
+  const next=currentDetailIdx+dir;
+  if(next>=0&&next<VAULT_DATA.length) showVaultDetail(next);
+}
+
+function animateBars(){
+  requestAnimationFrame(()=>{
+    document.querySelectorAll('.bar-fill[data-pct]').forEach(el=>{
+      el.style.width=el.dataset.pct+'%';
+    });
+  });
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape') closeDrawer();
+  if(e.key==='ArrowLeft') navDetail(-1);
+  if(e.key==='ArrowRight') navDetail(1);
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+filterVaults();
+animateBars();
+</script>
 </body>
 </html>
-"@
+'@
+
+    $exportPathCls = if ([string]::IsNullOrWhiteSpace($ScanParameters.ExportPath)) { ' muted' } else { '' }
+    $exportPathText = if ($ScanParameters.ExportPath) { $ScanParameters.ExportPath } else { 'N/A' }
+
+    $html = $html `
+        -replace '__GENERATED_ON__', $generatedOn `
+        -replace '__SUB_COUNT__', ($SubscriptionResults.Count) `
+        -replace '__TOTAL_VAULTS__', $TotalVaults `
+        -replace '__CRITICAL_COUNT__', $criticalCount `
+        -replace '__HIGH_COUNT__', $highCount `
+        -replace '__MEDIUM_COUNT__', $mediumCount `
+        -replace '__LOW_COUNT__', $lowCount `
+        -replace '__RISK_ROWS_2__', $riskRows `
+        -replace '__RISK_ROWS__', $riskRows `
+        -replace '__CONTROL_ROWS_TOP__', $controlRowsTop `
+        -replace '__CONTROL_ROWS_FULL__', $controlRowsFull `
+        -replace '__TOP_VAULTS__', $topVaultsHtml `
+        -replace '__FINDING_ROWS__', $findingRows `
+        -replace '__SUB_ROWS__', $subRows `
+        -replace '__TENANT__', $SessionInfo.Tenant `
+        -replace '__ACCOUNT__', $SessionInfo.Account `
+        -replace '__ENVIRONMENT__', $SessionInfo.Environment `
+        -replace '__SCOPE__', $ScanParameters.Scope `
+        -replace '__EXPORT_ENABLED__', $ScanParameters.ExportEnabled `
+        -replace '__EXPORT_PATH_CLS__', $exportPathCls `
+        -replace '__EXPORT_PATH__', $exportPathText `
+        -replace '__EXEC_TIME__', $ScanSummary.ExecutionTime `
+        -replace '__FINDINGS_JSON__', $findingsJson
 
     return $html
 }
