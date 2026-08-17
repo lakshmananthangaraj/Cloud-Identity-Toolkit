@@ -8,7 +8,7 @@
 
 | Script | Synopsis | Version | Last Modified |
 |---|---|---|---|
-| [Get-AzureStorageAccountSASTokenAudit.ps1](./Get-AzureStorageAccountSASTokenAudit.ps1) | Audits Azure Storage Account SAS tokens, stored access policies, and connection strings across one or all subscriptions, then exports a detailed CSV report. | 1.1 | 28 Jul 2026 |
+| [Get-AzureStorageAccountSASTokenAudit.ps1](./Get-AzureStorageAccountSASTokenAudit.ps1) | Audits Azure Storage Account SAS tokens, stored access policies, and connection strings across one or all subscriptions, then exports a detailed CSV report. | 1.1 | 31 Jul 2026 |
 
 ---
 
@@ -193,4 +193,5 @@ Modified-On  : 27 July 2026
 </details>
 
 <!-- SCRIPT-CATALOG:END -->
+
 

@@ -8,8 +8,11 @@
 
 | Script | Synopsis | Version | Last Modified |
 |---|---|---|---|
-| [Generate-RBACVisualizationReport.ps1](./Generate-RBACVisualizationReport.ps1) | Generates an interactive HTML visualization report from Azure RBAC assignment CSV data. | 1.0 | 22 Jul 2026 |
-| [Get-AzureRBACAssignments.ps1](./Get-AzureRBACAssignments.ps1) | Retrieves and analyzes Azure RBAC role assignments across one or more subscriptions, with optional CSV export and an auto-generated HTML summary report. | 1.8 | 22 Jul 2026 |
+| [Generate-RBACVisualizationReport.ps1](./Generate-RBACVisualizationReport.ps1) | Generates an interactive HTML visualization report from Azure RBAC assignment CSV data. | 3.0 | 08 Aug 2026 |
+| [Get-AzureRBACAssignments.ps1](./Get-AzureRBACAssignments.ps1) | Retrieves and analyzes Azure RBAC role assignments across one or more subscriptions, with optional CSV export and an auto-generated HTML summary report. | 1.8 | 08 Aug 2026 |
+| [Get-AzureRBACSecurityPosture.ps1](./Get-AzureRBACSecurityPosture.ps1) | Analyzes Azure RBAC security posture across one or more subscriptions, surfacing high-risk assignments and least-privilege gaps with per-finding risk ratings. | 1.0 | 15 Aug 2026 |
+| [Remove-AzureRBACAssignments.ps1](./Remove-AzureRBACAssignments.ps1) | Removes Azure RBAC role assignments for any principal type (User, Group, ServicePrincipal, Unknown) in bulk using a CSV-driven input file, with pre-removal backup, HTML audit report, and a companion restore function. | 1.2 | 08 Aug 2026 |
+| [Remove-AzureRBACUserAssignments.ps1](./Remove-AzureRBACUserAssignments.ps1) | Removes Azure RBAC role assignments for individual user accounts across one or more subscriptions, with full audit logging, pre-removal backup, and an auto-generated HTML summary report. | 1.0 | 08 Aug 2026 |
 
 ---
 
@@ -19,79 +22,110 @@
 ```powershell
 
 
-Author          : Lakshmanan Thangaraj
-Version         : 1.0
-Created-On      : 02 March 2026
-Modified-On     : 22 July 2026
+Author       : Lakshmanan Thangaraj
+Version      : 3.0
+Created-On   : 02 March 2026
+Modified-On  : 05 August 2026
 
 .SYNOPSIS
     Generates an interactive HTML visualization report from Azure RBAC assignment CSV data.
 
 .DESCRIPTION
-    The Generate-RBACVisualizationReport script transforms Azure RBAC assignment data,
+    The Generate-RBACVisualizationReport function transforms Azure RBAC assignment data,
     previously exported to CSV (e.g. via Get-AzureRBACAssignments.ps1), into a self-contained,
-    interactive HTML report.
+    interactive HTML dashboard following the Cloud-Identity-Toolkit golden design system.
 
-    It supports:
-        - Overview tab      — KPI cards, scope/object-type distribution charts
-        - Principals tab    — Per-principal assignment breakdown, searchable
-        - Roles tab         — Per-role usage breakdown, searchable
-        - Resources tab     — Resource-type distribution
-        - Analysis Matrix tab — Principal-to-role assignment matrix, filterable
-        - Recommendations tab — Automated least-privilege findings (Owner-role ratio,
-          over-provisioned principals) and custom-role design suggestions
-        - Raw Data tab      — Full searchable/filterable assignment table with CSV export
-        - Optional GroupCategories parameter to bucket principals by naming pattern
-          (e.g. Reader/Developer/Architect) for organization-specific reporting
+    Features (v3.0):
+        - Fixed sidebar navigation with dark / light mode toggle
+        - CSV Upload Mode — the generated HTML can accept a new CSV drag-and-drop at runtime
+          to reload the entire dashboard without re-running the PowerShell script
+        - Header Bar      — Tenant Name, Report Title, Health Score, Risk Score, scan metadata
+        - Executive Dashboard — full KPI suite (Users, Groups, SPs, MIs, Custom Roles,
+                               Owner/Contributor/Reader/Unknown counts, High Risk), trend badges
+        - Security Dashboard — Critical/High/Medium/Low finding cards, 8 automated security checks
+                               (Owner ratio, SP-as-Owner, root-scope assignments, unknown principals,
+                               guest users, custom roles, wildcard scopes, over-provisioned principals)
+        - Principals      — Per-principal assignment breakdown with SignInName, Risk Score badge,
+                           searchable / filterable / paginated table, slide-in detail drawer
+        - Roles           — Per-role usage breakdown, permission-level badge, animated bar chart
+        - Resource Analysis — Top resource types, resource groups, individual resources with
+                             drill-down drawer showing assigned users / groups / SPs / roles / scope
+        - Subscriptions   — Per-subscription cards with Health Score, Risk Score,
+                           Owner/Contributor/Reader counts, slide-in detail drawer
+        - Environments    — Auto-detected Dev/UAT/Prod/Test/Staging breakdown; per-env
+                           Health Score, High Risk Count, assignment & principal charts
+        - Recommendations — Enhanced cards with Priority, Business Impact, Effort, MS Best Practice,
+                           Suggested Fix, export affected objects per finding
+        - Audit Report    — Executive summary: total assignments, high risk, passed/failed checks,
+                           compliance status (Pass / Warning / Fail)
+        - Raw Data        — All 10 columns with global search, multi-column filters,
+                           column chooser, copy-row button, export filtered CSV
+        - Footer          — Toolkit name, version, PowerShell version, execution time,
+                           record count, author, GitHub repository
 
 .PARAMETER CsvPath
-    Path to the input CSV file containing Azure RBAC assignments. Expected columns:
-    SubscriptionName, SubscriptionId, DisplayName, RoleDefinitionName, ResourceType, Scope
-    (matches the export format of Get-AzureRBACAssignments.ps1).
+    Path to the input CSV file containing Azure RBAC assignments.
+    Expected columns: SubscriptionName, SubscriptionId, TenantId, DisplayName, SignInName,
+    ObjectType, RoleDefinitionName, ResourceType, Scope.
 
 .PARAMETER OutputPath
-    Path where the generated HTML report will be saved. Default: RBAC-Visualization-Report.html
+    Path where the generated HTML report will be saved.
+    Default: RBAC-Visualization-Report.html
+
+.PARAMETER TenantName
+    Optional friendly name for the Azure tenant displayed in the report header.
+    Default: inferred from TenantId or "Unknown Tenant".
 
 .PARAMETER GroupCategories
-    Optional hashtable to categorize principals by naming pattern, e.g.: @{Reader=@('*reader*')
+    Optional hashtable to categorize principals by naming pattern.
+    Reserved for a future release.
+
+.INPUTS
+    None. Reads from -CsvPath on disk.
 
 .OUTPUTS
-    None. Writes an HTML file to -OutputPath.
+    None. Writes a self-contained HTML file to -OutputPath.
 
 .EXAMPLE
-    .\Generate-RBACVisualizationReport -CsvPath ".\rbac-assignments.csv"
+    Generate-RBACVisualizationReport -CsvPath ".\rbac-assignments.csv"
 
 .EXAMPLE
-    .\Generate-RBACVisualizationReport -CsvPath ".\rbac-assignments.csv" -OutputPath ".\reports\rbac-report.html"
+    Generate-RBACVisualizationReport -CsvPath ".\rbac-assignments.csv" `
+        -OutputPath ".\reports\rbac-report.html" -TenantName "Contoso Corp"
 
 .NOTES
-    Requires: PowerShell 5.1 or higher.
-
-    Input dependency:
-    Expects a CSV in the format produced by Get-AzureRBACAssignments.ps1 (this repo,
-    Azure/RBAC/). Run that script first with -ExportToCsv to generate compatible input.
-
-    External dependency:
-    Loads Chart.js from a public CDN (cdn.jsdelivr.net) for chart rendering. In network-
-    restricted/offline environments, charts will not render; data tables remain fully
-    functional (report includes an on-page fallback message in that case).
-
-    Known limitation:
-    -GroupCategories is accepted and internally computed into $categorizedPrincipals,
-    but that grouping is not currently surfaced anywhere in the generated HTML report
-    (no dedicated tab, filter, or chart consumes it yet). Passing this parameter today
-    has no visible effect on the output. Treat as reserved for a future release.
 
     ─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
-        1.0 (22-Jul-2026)      - Initial public release: interactive HTML report with
-                                 charts, tables, principal-role matrix, and automated
-                                 least-privilege recommendations, generated from
-                                 Get-AzureRBACAssignments.ps1 CSV output.
+        3.0 (05-Aug-2026)      - Major enterprise upgrade. New: CSV runtime upload,
+                                 header bar with Health/Risk Score, Executive Dashboard
+                                 (full KPI suite), Security Dashboard (8 checks, severity
+                                 cards), Resource Analysis tab, enhanced Subscription cards
+                                 (Health/Risk/counts), enhanced Environment tab (Health/Risk),
+                                 enhanced Recommendations (Priority/Impact/Effort/Fix/Export),
+                                 Audit Report tab, enhanced Raw Data (column chooser, copy row),
+                                 footer, -TenantName parameter.
+        2.0 (05-Aug-2026)      - Major redesign: golden dark/light dashboard theme,
+                                 fixed sidebar navigation, dark/light toggle. Tabs:
+                                 Environments, Subscriptions, Principals, Raw Data.
+        1.0 (22-Jul-2026)      - Initial public release.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Pre-Requisites:
+    ─────────────────────────────────────────────────────────────────────────────
+        1. PowerShell 5.1 or higher.
+        2. Input CSV produced by Get-AzureRBACAssignments.ps1 (-ExportToCsv switch).
+        3. Internet access for Chart.js CDN (cdn.jsdelivr.net).
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Known Limitations:
+    ─────────────────────────────────────────────────────────────────────────────
+        - -GroupCategories is accepted but not yet surfaced in HTML (reserved).
+        - Environment auto-detection scans SubscriptionName for keywords.
+        - Principal-Role matrix capped at 50 x 20 for browser performance.
 
 .LINK
-    Get-AzureRBACAssignments.ps1 (companion script — generates compatible CSV input)
     https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/Azure/RBAC/Get-AzureRBACAssignments.ps1
 
 
@@ -247,5 +281,461 @@ Modified-On     : 22 July 2026
 ```
 </details>
 
+<details>
+<summary>📖 <strong>Get-AzureRBACSecurityPosture.ps1</strong> – full help block</summary>
+
+```powershell
+
+
+Author          : Lakshmanan Thangaraj
+Version         : 1.0
+Created-On      : 12 August 2026
+Modified-On     : 12 August 2026
+
+.SYNOPSIS
+    Analyzes Azure RBAC security posture across one or more subscriptions, surfacing
+    high-risk assignments and least-privilege gaps with per-finding risk ratings.
+
+.DESCRIPTION
+    Get-AzureRBACSecurityPosture performs a comprehensive RBAC security posture
+    assessment across Azure subscriptions. It examines role assignments for
+    indicators of over-privilege, misconfiguration, and identity risk, including:
+
+        - Privileged role detection (Owner, Contributor, User Access Administrator)
+        - Custom role definition enumeration and custom-role assignment identification
+        - Assignment scope classification (Management Group / Subscription / Resource Group
+          / Resource) with risk weighting — broad scopes on powerful roles are rated High
+        - Principal type classification (User / Group / ServicePrincipal) with
+          GroupBased assignment flagging (group is identified; membership is not expanded
+          in V1)
+        - Service principal identification with AppId capture for remediation
+        - PIM eligibility assessment (best-effort; requires Microsoft.Graph and
+          PrivilegedAccess.Read.AzureResources; skips gracefully if unavailable)
+        - Per-finding risk rating (High / Medium / Low / Informational) based on role
+          privilege level and assignment scope
+        - Optional CSV export of all collected findings
+        - Always-on interactive HTML report (dark-themed, self-contained) with sidebar
+          navigation, sortable findings table, stat cards, distribution charts, and
+          per-finding detail drawer
+        - Interactive Grid View display of findings (where a GUI is available)
+
+.PARAMETER AllSubscriptions
+    Switch. Scans every subscription visible to the authenticated account/context.
+    This is also the default behavior if -SubscriptionIds is not supplied.
+
+.PARAMETER SubscriptionIds
+    String array of specific Azure subscription IDs to scan instead of all subscriptions.
+    Ignored if -AllSubscriptions is also specified.
+
+.PARAMETER ExportToCsv
+    Switch. If specified, exports all collected findings to the path given in -CsvPath.
+    The HTML report is generated regardless of whether this switch is used.
+
+.PARAMETER CsvPath
+    Path where the CSV export will be written if -ExportToCsv is specified. The HTML
+    report path is derived from this value by replacing the .csv extension with .html.
+    Default: C:\Temp\AzureRBACSecurityPosture-Report.csv
+
+.INPUTS
+    None. This function does not accept pipeline input.
+
+.OUTPUTS
+    None directly to the pipeline. Always writes an HTML report alongside -CsvPath
+    (or the default path). Optionally writes a CSV file if -ExportToCsv is specified.
+    Displays results in an interactive Grid View window where a GUI is available.
+
+.EXAMPLE
+    Get-AzureRBACSecurityPosture -AllSubscriptions
+
+.EXAMPLE
+    Get-AzureRBACSecurityPosture -SubscriptionIds @("SubscriptionID1", "SubscriptionID2")
+
+.EXAMPLE
+    Get-AzureRBACSecurityPosture -AllSubscriptions -ExportToCsv -CsvPath "C:\Audits\RBACPosture.csv"
+
+.NOTES
+    ─────────────────────────────────────────────────────────────────────────────
+    Version History:
+    ─────────────────────────────────────────────────────────────────────────────
+    1.0 (12-Aug-2026) - Initial release. Privileged-role detection, custom role
+                        enumeration, scope classification, principal-type analysis,
+                        service principal capture, best-effort PIM assessment,
+                        per-finding risk ratings, CSV + HTML report output.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Pre-Requisites:
+    ─────────────────────────────────────────────────────────────────────────────
+    1. Az.Accounts module — authentication and subscription enumeration
+    2. Az.Resources module — role assignment and role definition retrieval
+       (Microsoft.Authorization/roleAssignments/read at subscription scope)
+    3. Microsoft.Graph module (optional) — PIM eligibility assessment
+       Permission required: PrivilegedAccess.Read.AzureResources
+       If absent, PIM columns are populated with "Not Assessed".
+    4. A valid Azure account with Reader role (minimum) at the subscription level.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Known Limitations:
+    ─────────────────────────────────────────────────────────────────────────────
+    - Group membership is not expanded in V1. Group-based assignments are flagged
+      with the group identity; member enumeration requires Microsoft.Graph and
+      is deferred to a future release.
+    - PIM assessment is best-effort. If Microsoft.Graph, required permissions, or
+      Azure AD P2 / Governance licensing are unavailable, PIM status is reported
+      as "Not Assessed" and execution continues.
+    - Interactive Grid View requires a GUI-capable session. In headless/CI/Linux
+      sessions this step is skipped gracefully; CSV/HTML output is unaffected.
+    - Default -CsvPath (C:\Temp\...) is a Windows-specific path. On macOS/Linux
+      PowerShell 7, supply an explicit -CsvPath.
+    - Management Group-scoped assignments are reported under the subscription
+      context in which they appear; MG-level enumeration requires explicit
+      Set-AzContext to a management group scope.
+
+.LINK
+    https://learn.microsoft.com/en-us/azure/role-based-access-control/overview
+
+.LINK
+    https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices
+
+.LINK
+    https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure
+
+
+```
+</details>
+
+<details>
+<summary>📖 <strong>Remove-AzureRBACAssignments.ps1</strong> – full help block</summary>
+
+```powershell
+
+
+Author       : Lakshmanan Thangaraj
+Version      : 1.2
+Created-On   : 31 October 2025
+Modified-On  : 08 August 2026
+
+.SYNOPSIS
+    Removes Azure RBAC role assignments for any principal type (User, Group,
+    ServicePrincipal, Unknown) in bulk using a CSV-driven input file, with
+    pre-removal backup, HTML audit report, and a companion restore function.
+
+.DESCRIPTION
+    Remove-AzureRBACAssignments automates identification and removal of Azure
+    Role-Based Access Control (RBAC) assignments using a CSV file as the source
+    of truth. Each row in the CSV represents one principal/role/scope combination;
+    the script validates the assignment is still live and then removes it — or
+    previews the removal when -DryRun is supplied.
+
+    Key behaviours
+    ──────────────
+    • Validates that the input CSV contains all required columns before processing.
+    • Before any removal, writes a timestamped JSON backup and CSV backup of every
+      live assignment that is about to be removed — enabling full restore via the
+      companion Restore-AzureRBACAssignments function.
+    • Switches Azure subscription context per row so multi-subscription CSVs are
+      handled correctly.
+    • Supports all principal ObjectTypes: User, ServicePrincipal, Group, Unknown.
+      User rows are matched by SignInName (UPN). Non-User rows are matched by
+      Scope + RoleDefinitionName + ObjectType, then narrowed by DisplayName.
+    • Rows missing or containing an unrecognised ObjectType are skipped with
+      ResultCode SKIPPED-INVALID-OBJECTTYPE.
+    • Non-User rows with no DisplayName and more than one candidate assignment are
+      marked Ambiguous and skipped to prevent accidental removal.
+    • Validates each assignment is still live before attempting removal. Already-
+      removed or never-present assignments are logged as NotFound — not errors.
+    • Supports -DryRun (preview without changes) and -Force (suppress confirmation).
+    • After processing, generates a self-contained HTML audit report with stat cards,
+      filterable/sortable results table, skipped-items tab, and session info tab.
+    • All output files (JSON backup, CSV backup, Summary CSV, HTML report, log) are
+      written under a single -OutputPath folder with timestamp-based names.
+
+.PARAMETER InputFileCsvPath
+    Full path to the CSV file containing RBAC assignment rows to remove. The file
+    must exist and must contain the columns: SubscriptionName, SubscriptionId,
+    TenantId, DisplayName, SignInName, ObjectType, RoleDefinitionName, Scope.
+    ObjectType must be one of: User, ServicePrincipal, Group, Unknown.
+
+.PARAMETER OutputPath
+    Folder where all output files are written. Created automatically if it does not
+    exist. Defaults to C:\Temp when omitted. All files are timestamped:
+      • RBACRemoval_Backup_<ts>.json
+      • RBACRemoval_Backup_<ts>.csv
+      • RBACRemoval_Summary_<ts>.csv
+      • RBACRemoval_Report_<ts>.html
+      • RBACRemoval_<ts>.log  (only when -EnableLog is supplied)
+
+.PARAMETER EnableLog
+    Switch. When supplied, detailed timestamped log lines are written to the .log
+    file under -OutputPath. Omit for high-volume runs where log I/O is not needed.
+
+.PARAMETER DryRun
+    Switch. Runs the script in preview mode — resolves and validates each assignment
+    but does NOT call Remove-AzRoleAssignment and does NOT write a backup. All
+    would-be actions are recorded in the summary CSV with Status = "WhatIf".
+
+.PARAMETER Force
+    Switch. Suppresses the interactive confirmation prompt that is shown before any
+    live removals begin. Has no effect when -DryRun is supplied.
+
+.INPUTS
+    None. This script does not accept pipeline input.
+
+.OUTPUTS
+    Returns a collection of result objects summarising every processed row.
+
+.EXAMPLE
+    .\Remove-AzureRBACAssignments.ps1 -InputFileCsvPath "C:\Temp\RBACToRemove.csv"
+
+    Processes the CSV, prompts for confirmation, then removes all matching role
+    assignments. Output files land in C:\Temp.
+
+.EXAMPLE
+    .\Remove-AzureRBACAssignments.ps1 -InputFileCsvPath "C:\Temp\RBACToRemove.csv" -DryRun
+
+    Dry-run. Validates each row and logs what would be removed without making any
+    changes. No backup is written. Safe to run against production.
+
+.EXAMPLE
+    .\Remove-AzureRBACAssignments.ps1 `
+        -InputFileCsvPath "C:\Temp\RBACToRemove.csv" `
+        -OutputPath       "C:\Audits\RBAC" `
+        -EnableLog `
+        -Force
+
+    Removes all matching assignments without confirmation. All output files are
+    written to C:\Audits\RBAC.
+
+.EXAMPLE
+    .\Remove-AzureRBACAssignments.ps1 `
+        -InputFileCsvPath "C:\Temp\RBACToRemove.csv" `
+        -OutputPath       "C:\Audits\RBAC" `
+        -EnableLog
+
+    Interactive run with full logging. Confirmation prompt summarises the scope
+    before proceeding.
+
+.NOTES
+    ─────────────────────────────────────────────────────────────────────────────
+    Version History:
+    ─────────────────────────────────────────────────────────────────────────────
+    1.2 (08-Aug-2026) - Added pre-removal JSON + CSV backup, HTML audit report
+                        with stat cards / sortable table / skipped tab / session
+                        tab, companion Restore-AzureRBACAssignments function,
+                        -OutputPath (replaces individual file-path params),
+                        -Force switch with interactive confirmation prompt, and
+                        "Unique Principals Targeted" stat card. Version badge in
+                        HTML report is driven from the script version string.
+    1.1 (07-Aug-2026) - Extended to process all ObjectTypes (User, ServicePrincipal,
+                        Group, Unknown). Non-User rows matched by Scope +
+                        RoleDefinitionName + ObjectType, narrowed by DisplayName.
+                        Added Ambiguous safeguard for blank-DisplayName multi-match
+                        rows. Core removal, -WhatIf, logging, and summary unchanged.
+    1.0 (31-Oct-2025) - Initial release. CSV-driven RBAC removal for User, Group,
+                        and ServicePrincipal scenarios. Includes -WhatIf dry-run,
+                        unified console/log output, pre-requisite and authentication
+                        checks, and summary CSV reporting.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Pre-Requisites:
+    ─────────────────────────────────────────────────────────────────────────────
+    1. Az.Accounts and Az.Resources PowerShell modules (auto-installed if absent).
+    2. PowerShell 5.1 or higher.
+    3. The executing identity must hold Owner or User Access Administrator on every
+       subscription whose assignments appear in the input CSV.
+    4. An active Azure session — the script prompts Connect-AzAccount if none found.
+    5. Input CSV columns required: SubscriptionName, SubscriptionId, TenantId,
+       DisplayName, SignInName, ObjectType, RoleDefinitionName, Scope.
+    6. For ServicePrincipal/Group/Unknown rows, populate DisplayName whenever
+       possible to avoid the Ambiguous-skip safeguard.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Known Limitations:
+    ─────────────────────────────────────────────────────────────────────────────
+    - Role removals require Owner or User Access Administrator; Contributor alone
+      is not sufficient.
+    - Processing very large CSVs across many subscriptions may take considerable
+      time. Consider splitting into per-subscription batches for parallel runs.
+    - Management-Group-scoped assignments require appropriate permissions at that
+      scope; subscription-level Owner is not sufficient.
+    - Non-User rows with blank DisplayName are only resolved when exactly one
+      assignment matches Scope + RoleDefinitionName + ObjectType; otherwise the
+      row is skipped as Ambiguous.
+    - The backup JSON contains the ObjectId of each removed assignment. Restoring
+      after an identity has been deleted from the tenant will fail at re-assignment
+      time with a principal-not-found error.
+
+.LINK
+    https://github.com/lakshmananthangaraj/Cloud-Identity-Toolkit/blob/main/Azure/RBAC/Remove-AzureRBACAssignments.ps1
+
+.LINK
+    https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-remove
+
+.LINK
+    https://learn.microsoft.com/en-us/powershell/module/az.resources/remove-azroleassignment
+
+.LINK
+    https://learn.microsoft.com/en-us/powershell/module/az.resources/get-azroleassignment
+
+.LINK
+    https://learn.microsoft.com/en-us/powershell/module/az.accounts/connect-azaccount
+
+
+```
+</details>
+
+<details>
+<summary>📖 <strong>Remove-AzureRBACUserAssignments.ps1</strong> – full help block</summary>
+
+```powershell
+
+
+    Author       : Lakshmanan Thangaraj
+    Version      : 1.0
+    Created-On   : 07 August 2026
+    Modified-On  : 07 August 2026
+
+.SYNOPSIS
+    Removes Azure RBAC role assignments for individual user accounts across one or
+    more subscriptions, with full audit logging, pre-removal backup, and an
+    auto-generated HTML summary report.
+
+.DESCRIPTION
+    The Remove-AzureRBACUserAssignments function removes Azure Role-Based Access
+    Control (RBAC) assignments for User-type principals across one or multiple Azure
+    subscriptions.
+
+    It supports three input modes — all operating under the same scope rules:
+      - Single or multiple UPNs via -UserPrincipalName
+      - Bulk input via -BulkCsvPath (CSV with a required 'UserPrincipalName' column
+        and an optional 'Scope' column)
+
+    Scope behaviour (consistent across all input modes):
+      - If a Scope is provided (via -Scope parameter or the CSV 'Scope' column),
+        the script removes ONLY the assignment(s) at that exact scope for that user.
+      - If no Scope is provided, the script removes ALL direct user RBAC assignments
+        across the target subscriptions for that user.
+
+    Safety features:
+      - ShouldProcess / -WhatIf support — preview changes without making them.
+      - Interactive confirmation (bypassed with -Force) before any removal begins.
+      - Pre-removal backup of all affected user assignments (JSON + CSV).
+      - Session-scoped audit log written in plain English from start to finish.
+      - Companion Restore-AzureRBACUserAssignments function in the same file.
+      - HTML summary report auto-generated at end of every run.
+
+.PARAMETER UserPrincipalName
+    One or more User Principal Names (UPNs / sign-in addresses) whose RBAC
+    assignments should be removed. Supports a single string or a string array.
+    Example: "alice@contoso.com" or @("alice@contoso.com","bob@contoso.com")
+
+.PARAMETER Scope
+    Optional. Azure resource scope path to restrict removal to a specific scope
+    (e.g. "/subscriptions/00000000-.../resourceGroups/MyRG"). When provided,
+    only assignments at exactly this scope are removed for the given user(s).
+    When omitted, all direct assignments across target subscriptions are removed.
+    This parameter applies to the -UserPrincipalName input mode only.
+
+.PARAMETER BulkCsvPath
+    Path to a CSV file with user removal targets. Required column: UserPrincipalName.
+    Optional column: Scope (same semantics as the -Scope parameter, applied per row).
+    Rows missing the Scope column (or with a blank Scope value) will have all direct
+    assignments removed.
+
+.PARAMETER AllSubscriptions
+    Switch. Scans every subscription visible to the authenticated account. This is
+    the default if -SubscriptionIds is not supplied.
+
+.PARAMETER SubscriptionIds
+    String array of specific Azure subscription IDs to scan instead of all
+    subscriptions. Ignored if -AllSubscriptions is also specified.
+
+.PARAMETER OutputPath
+    Folder path where the audit log, backup files, and HTML report are written.
+    Defaults to C:\Temp. The folder is created automatically if it does not exist.
+
+.PARAMETER Force
+    Switch. Suppresses the interactive confirmation prompt before removals begin.
+    Removals still respect -WhatIf if that switch is also used.
+
+.INPUTS
+    None. This function does not accept pipeline input.
+
+.OUTPUTS
+    None directly to the pipeline. Writes:
+      - Audit log    : <OutputPath>\AzureRBACRemoval-AuditLog-<timestamp>.txt
+      - Backup JSON  : <OutputPath>\AzureRBACRemoval-Backup-<timestamp>.json
+      - Backup CSV   : <OutputPath>\AzureRBACRemoval-Backup-<timestamp>.csv
+      - HTML report  : <OutputPath>\AzureRBACRemoval-Report-<timestamp>.html
+
+.EXAMPLE
+    # Remove all RBAC assignments for a single user across all subscriptions
+    Remove-AzureRBACUserAssignments -UserPrincipalName "alice@contoso.com" -AllSubscriptions
+
+.EXAMPLE
+    # Remove RBAC assignments for multiple users, with -WhatIf to preview first
+    Remove-AzureRBACUserAssignments -UserPrincipalName @("alice@contoso.com","bob@contoso.com") `
+        -AllSubscriptions -WhatIf
+
+.EXAMPLE
+    # Remove only a specific scope assignment for a user, skipping the confirm prompt
+    Remove-AzureRBACUserAssignments -UserPrincipalName "alice@contoso.com" `
+        -Scope "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/MyRG" `
+        -AllSubscriptions -Force
+
+.EXAMPLE
+    # Bulk removal from a CSV file across specific subscriptions
+    Remove-AzureRBACUserAssignments -BulkCsvPath "C:\Temp\UsersToRemove.csv" `
+        -SubscriptionIds @("sub-id-1","sub-id-2")
+
+.EXAMPLE
+    # Restore from a previously created JSON backup
+    Restore-AzureRBACUserAssignments -BackupJsonPath "C:\Temp\AzureRBACRemoval-Backup-20260807-143022.json"
+
+.NOTES
+    ─────────────────────────────────────────────────────────────────────────────
+    Version History:
+    ─────────────────────────────────────────────────────────────────────────────
+    1.0 (07-Aug-2026) - Initial release. Supports single UPN, multi-UPN, and bulk
+                        CSV input modes. Full audit logging, pre-removal JSON/CSV
+                        backup, HTML summary report, WhatIf/Force/ShouldProcess
+                        support, and companion Restore function.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Pre-Requisites:
+    ─────────────────────────────────────────────────────────────────────────────
+    1. Az PowerShell module (Az.Accounts, Az.Resources) — installed automatically
+    with user consent if missing.
+    2. Authenticated Azure session — the script will call Connect-AzAccount if no
+    active context is detected.
+    3. The executing account must have 'Microsoft.Authorization/roleAssignments/read'
+    AND 'Microsoft.Authorization/roleAssignments/delete' permissions on each target
+    subscription (typically: User Access Administrator or Owner role).
+    4. PowerShell 5.1 or later. No PS7-specific syntax is used.
+
+    ─────────────────────────────────────────────────────────────────────────────
+    Known Limitations:
+    ─────────────────────────────────────────────────────────────────────────────
+    - Only removes User-type principal assignments. Group and Service Principal
+    assignments are intentionally skipped and logged as informational notices.
+    - Management Group scoped assignments are not in scope; they require elevated
+    permissions and a separate API call. A warning is logged if detected.
+    - Default -OutputPath (C:\Temp) is a Windows-specific path. On macOS/Linux
+    PowerShell 7, supply an explicit -OutputPath value.
+    - The -Scope parameter applies uniformly to all UPNs supplied via
+    -UserPrincipalName. For per-user scope control, use -BulkCsvPath with a
+    Scope column.
+    - Interactive Grid View for the results preview requires a GUI-capable session.
+    In headless/CI/Linux environments this step is skipped gracefully.
+
+.LINK
+    https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-remove
+    https://learn.microsoft.com/en-us/powershell/module/az.resources/remove-azroleassignment
+    https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-list-powershell
+
+
+```
+</details>
+
 <!-- SCRIPT-CATALOG:END -->
+
 
