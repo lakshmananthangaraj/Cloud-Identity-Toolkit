@@ -1979,20 +1979,20 @@ Function Test-AzurePrivateDNSArchitecture {
   #-------------------------------------------------------------------- [ Console Summary ]
 
   # Aggregate risk counts
-  $highTotal = ($zoneFindings + $vnetFindings + $peFindings |
+  $highTotal = @($zoneFindings + $vnetFindings + $peFindings |
     Where-Object { $_.RiskLevel -eq "High" }).Count
-  $medTotal = ($zoneFindings + $vnetFindings + $peFindings |
+  $medTotal = @($zoneFindings + $vnetFindings + $peFindings |
     Where-Object { $_.RiskLevel -eq "Medium" }).Count
-  $lowTotal = ($zoneFindings + $vnetFindings + $peFindings |
+  $lowTotal = @($zoneFindings + $vnetFindings + $peFindings |
     Where-Object { $_.RiskLevel -eq "Low" }).Count
-  $infoTotal = ($zoneFindings + $vnetFindings + $peFindings |
+  $infoTotal = @($zoneFindings + $vnetFindings + $peFindings |
     Where-Object { $_.RiskLevel -eq "Info" }).Count
 
   Write-Summary -Data ([ordered]@{
       "Subscriptions Scanned"        = $subTotal
-      "Private DNS Zones Assessed"   = $zoneFindings.Count
-      "VNets with Private Endpoints" = $vnetFindings.Count
-      "Private Endpoints Assessed"   = $peFindings.Count
+      "Private DNS Zones Assessed"   = @($zoneFindings).Count
+      "VNets with Private Endpoints" = @($vnetFindings).Count
+      "Private Endpoints Assessed"   = @($peFindings).Count
       "Execution Time"               = "$execTime (mm:ss)"
     })
 
