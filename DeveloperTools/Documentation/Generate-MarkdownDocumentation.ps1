@@ -256,8 +256,7 @@ Function Generate-MarkdownDocumentation {
         }
 
         # --- Nested helper: turn a folder's entries into a Markdown table ---
-        function ConvertTo-CatalogMarkdownTable 
-        {
+        function ConvertTo-CatalogMarkdownTable {
             param([string]$RelativeFolderLabel, [object[]]$Entries)
 
             $lines = New-Object -TypeName System.Collections.Generic.List[string]
@@ -277,10 +276,8 @@ Function Generate-MarkdownDocumentation {
             $lines.Add('')
 
             # Add collapsible sections with the full help block for each script
-            foreach ($entry in $Entries) 
-            {
-                if ($entry.FullHelp) 
-                {
+            foreach ($entry in $Entries) {
+                if ($entry.FullHelp) {
                     $lines.Add('<details>')
                     $lines.Add("<summary>📖 <strong>$($entry.FileName)</strong> – full help block</summary>")
                     $lines.Add('')
@@ -327,8 +324,9 @@ Function Generate-MarkdownDocumentation {
             $getChildItemParams = @{ Path = $SourcePath; Directory = $true; ErrorAction = 'Stop' }
             if ($Recurse) { $getChildItemParams['Recurse'] = $true }
 
-            $candidateFolders = @((Get-Item -Path $SourcePath), (Get-ChildItem @getChildItemParams)) |
-            Where-Object { $ExcludeFolder -notcontains $_.Name }
+            $rootFolder = Get-Item -Path $SourcePath -ErrorAction Stop
+            $subFolders = Get-ChildItem @getChildItemParams
+            $candidateFolders = @($rootFolder) + @($subFolders) | Where-Object { $ExcludeFolder -notcontains $_.Name }
 
             $scriptsDocumented = 0
             $metadataIssues = New-Object -TypeName System.Collections.Generic.List[object]
@@ -360,11 +358,12 @@ Function Generate-MarkdownDocumentation {
                 if ($Mode -eq 'PerFolderReadme') {
                     $readmePath = Join-Path -Path $folder.FullName -ChildPath $ReadmeFileName
 
-                    if (-not $PSCmdlet.ShouldProcess($readmePath, 'Update script catalog section')) { continue }
-
                     $existingContent = if (Test-Path -Path $readmePath) { Get-Content -Path $readmePath -Raw } else { "# $folderLabel`n" }
                     $updatedContent = Set-MarkerSection -ExistingContent $existingContent -NewSectionBody $tableMarkdown
-                    Set-Content -Path $readmePath -Value $updatedContent -Encoding UTF8
+
+                    if ($PSCmdlet.ShouldProcess($readmePath, 'Update script catalog section')) {
+                        Set-Content -Path $readmePath -Value $updatedContent -Encoding UTF8
+                    }
                     $outputFiles.Add($readmePath)
                 }
                 else {
