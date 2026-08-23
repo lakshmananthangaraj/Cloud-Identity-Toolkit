@@ -245,1014 +245,1070 @@ Modified-On     : 22 August 2026
 
 
 Function Get-EntraIdentityBlastRadiusAssessment {
-    [CmdletBinding(DefaultParameterSetName = "ClientCredentials")]
+  [CmdletBinding(DefaultParameterSetName = "ClientCredentials")]
+  param (
+
+    # ── Authentication — Client Credentials ──────────────────────────────────
+    [Parameter(Mandatory = $true, ParameterSetName = "ClientCredentials")]
+    [ValidateNotNullOrEmpty()]
+    [string]$ClientId,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "ClientCredentials")]
+    [System.Security.SecureString]$ClientSecret,
+
+    # ── Authentication — BYOT ────────────────────────────────────────────────
+    [Parameter(Mandatory = $true, ParameterSetName = "BYOT")]
+    [ValidateNotNullOrEmpty()]
+    [string]$AccessToken,
+
+    # ── Always required ───────────────────────────────────────────────────────
+    [Parameter(Mandatory = $true, ParameterSetName = "ClientCredentials")]
+    [Parameter(Mandatory = $true, ParameterSetName = "BYOT")]
+    [ValidateNotNullOrEmpty()]
+    [string]$TenantId,
+
+    # ── Target identity ───────────────────────────────────────────────────────
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
+    [string]$TargetIdentityId,
+
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [ValidateNotNullOrEmpty()]
+    [string]$TargetUserPrincipalName,
+
+    # ── Scope switches ────────────────────────────────────────────────────────
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [switch]$IncludeEligibleRoles,
+
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [switch]$IncludeAzureRBAC,
+
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [string]$SubscriptionId,
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [string]$OutputPath = "C:\Temp\BlastRadius",
+
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [switch]$GenerateDashboard,
+
+    [Parameter(ParameterSetName = "ClientCredentials")]
+    [Parameter(ParameterSetName = "BYOT")]
+    [switch]$NoBrowserLaunch,
+
+    # ── Help ──────────────────────────────────────────────────────────────────
+    [Parameter(ParameterSetName = "Help")]
+    [switch]$ShowHelp
+  )
+
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Friendly Help
+  #─────────────────────────────────────────────────────────────────────────────
+
+  Function Show-FriendlyHelp {
+    Write-Host ""
+    Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "  ║      Entra ID — Identity Blast Radius Assessment             ║" -ForegroundColor Cyan
+    Write-Host "  ║                   Version 1.0  |  Help                       ║" -ForegroundColor Cyan
+    Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  What this script does:" -ForegroundColor Yellow
+    Write-Host "    Traces every relationship, role, permission, and resource reachable"
+    Write-Host "    from a single compromised Entra ID identity and produces a risk-rated"
+    Write-Host "    blast-radius score with a prioritized remediation plan."
+    Write-Host ""
+    Write-Host "  Authentication:" -ForegroundColor Yellow
+    Write-Host "    Mode 1 — App-only (client credentials):"
+    Write-Host '      $secret = Read-Host -Prompt "Client secret" -AsSecureString'
+    Write-Host '      Get-EntraIdentityBlastRadiusAssessment -ClientId <id> -ClientSecret $secret -TenantId <tid> ...'
+    Write-Host ""
+    Write-Host "    Mode 2 — Bring-Your-Own-Token (BYOT):"
+    Write-Host '      Get-EntraIdentityBlastRadiusAssessment -AccessToken $myToken -TenantId <tid> ...'
+    Write-Host ""
+    Write-Host "  Target identity (supply one):" -ForegroundColor Yellow
+    Write-Host "    -TargetUserPrincipalName  e.g. john.doe@contoso.com"
+    Write-Host "    -TargetIdentityId         Object ID GUID (User, Group, SP, or App)"
+    Write-Host ""
+    Write-Host "  Optional switches:" -ForegroundColor Yellow
+    Write-Host "    -IncludeEligibleRoles   Add PIM-eligible role assignments (needs Entra P2)"
+    Write-Host "    -IncludeAzureRBAC       Add Azure RBAC roles (needs Reader on subscription)"
+    Write-Host "    -SubscriptionId         Azure subscription ID for RBAC lookup"
+    Write-Host "    -GenerateDashboard      Produce the interactive HTML dashboard"
+    Write-Host "    -NoBrowserLaunch        Do not auto-open the dashboard after generation"
+    Write-Host "    -OutputPath             Where to write output files (default: C:\Temp\BlastRadius\)"
+    Write-Host ""
+    Write-Host "  Required Graph API permissions (Application, admin-consented):" -ForegroundColor Yellow
+    Write-Host "    User.Read.All, Group.Read.All, Directory.Read.All"
+    Write-Host "    Application.Read.All, RoleManagement.Read.Directory"
+    Write-Host "    AuditLog.Read.All, AppRoleAssignment.ReadWrite.All"
+    Write-Host ""
+    Write-Host "  For full documentation run:" -ForegroundColor Green
+    Write-Host "    Get-Help Get-EntraIdentityBlastRadiusAssessment -Full"
+    Write-Host ""
+  }
+
+  if ($ShowHelp) {
+    Show-FriendlyHelp
+    return
+  }
+
+  # Validate target identity — exactly one must be supplied
+  if (-not $TargetIdentityId -and -not $TargetUserPrincipalName) {
+    Write-Error "Supply either -TargetIdentityId or -TargetUserPrincipalName."
+    return
+  }
+  if ($TargetIdentityId -and $TargetUserPrincipalName) {
+    Write-Error "-TargetIdentityId and -TargetUserPrincipalName are mutually exclusive. Supply only one."
+    return
+  }
+
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Token Management (Client Credentials path)
+  #  Identical pattern to reference script — RequestAccessToken / ShouldRenewToken
+  #  / RenewTokenIfNeeded live at script scope so they survive across function calls.
+  #─────────────────────────────────────────────────────────────────────────────
+
+  Function RequestAccessToken {
+    $tokenEndpoint = "https://login.microsoftonline.com/$global:TenantId/oauth2/v2.0/token"
+
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($global:ClientSecretSecure)
+    Try {
+      $plainSecret = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+
+      $body = @{
+        client_id     = $global:ClientId
+        client_secret = $plainSecret
+        scope         = "https://graph.microsoft.com/.default"
+        grant_type    = "client_credentials"
+      }
+      $resp = Invoke-RestMethod -Uri $tokenEndpoint -Method POST -Body $body -ErrorAction Stop
+      $global:accessToken = $resp.access_token
+      $global:tokenExpirationTime = (Get-Date).AddSeconds($resp.expires_in)
+    }
+    Finally {
+      if ($bstr -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+      $plainSecret = $null
+      $body = $null
+    }
+  }
+
+  Function ShouldRenewToken {
+    if (-not $global:accessToken -or -not $global:tokenExpirationTime) { return $true }
+    return (($global:tokenExpirationTime - (Get-Date)).TotalMinutes -lt $global:RefreshIntervalInMinutes)
+  }
+
+  Function RenewTokenIfNeeded {
+    if (ShouldRenewToken) {
+      Write-Host "  🔄 Refreshing access token..." -ForegroundColor Yellow
+      RequestAccessToken
+    }
+  }
+
+  Function Connect-EntraID {
     param (
-
-        # ── Authentication — Client Credentials ──────────────────────────────────
-        [Parameter(Mandatory = $true, ParameterSetName = "ClientCredentials")]
-        [ValidateNotNullOrEmpty()]
-        [string]$ClientId,
-
-        [Parameter(Mandatory = $true, ParameterSetName = "ClientCredentials")]
-        [System.Security.SecureString]$ClientSecret,
-
-        # ── Authentication — BYOT ────────────────────────────────────────────────
-        [Parameter(Mandatory = $true, ParameterSetName = "BYOT")]
-        [ValidateNotNullOrEmpty()]
-        [string]$AccessToken,
-
-        # ── Always required ───────────────────────────────────────────────────────
-        [Parameter(Mandatory = $true, ParameterSetName = "ClientCredentials")]
-        [Parameter(Mandatory = $true, ParameterSetName = "BYOT")]
-        [ValidateNotNullOrEmpty()]
-        [string]$TenantId,
-
-        # ── Target identity ───────────────────────────────────────────────────────
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-        [string]$TargetIdentityId,
-
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [ValidateNotNullOrEmpty()]
-        [string]$TargetUserPrincipalName,
-
-        # ── Scope switches ────────────────────────────────────────────────────────
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [switch]$IncludeEligibleRoles,
-
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [switch]$IncludeAzureRBAC,
-
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [string]$SubscriptionId,
-
-        # ── Output ────────────────────────────────────────────────────────────────
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [string]$OutputPath = "C:\Temp\BlastRadius",
-
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [switch]$GenerateDashboard,
-
-        [Parameter(ParameterSetName = "ClientCredentials")]
-        [Parameter(ParameterSetName = "BYOT")]
-        [switch]$NoBrowserLaunch,
-
-        # ── Help ──────────────────────────────────────────────────────────────────
-        [Parameter(ParameterSetName = "Help")]
-        [switch]$ShowHelp
+      [Parameter(Mandatory = $true)] [string]$ClientId,
+      [Parameter(Mandatory = $true)] [System.Security.SecureString]$ClientSecret,
+      [Parameter(Mandatory = $true)] [string]$TenantId,
+      [int]$RefreshInterval = 15
     )
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Friendly Help
-    #─────────────────────────────────────────────────────────────────────────────
+    Try {
+      $global:accessToken = $null
+      $global:tokenExpirationTime = $null
+      $global:RefreshIntervalInMinutes = $RefreshInterval
+      $global:TenantId = $TenantId
+      $global:ClientId = $ClientId
+      $global:ClientSecretSecure = $ClientSecret
 
-    Function Show-FriendlyHelp {
-        Write-Host ""
-        Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║      Entra ID — Identity Blast Radius Assessment             ║" -ForegroundColor Cyan
-        Write-Host "  ║                   Version 1.0  |  Help                       ║" -ForegroundColor Cyan
-        Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "  What this script does:" -ForegroundColor Yellow
-        Write-Host "    Traces every relationship, role, permission, and resource reachable"
-        Write-Host "    from a single compromised Entra ID identity and produces a risk-rated"
-        Write-Host "    blast-radius score with a prioritized remediation plan."
-        Write-Host ""
-        Write-Host "  Authentication:" -ForegroundColor Yellow
-        Write-Host "    Mode 1 — App-only (client credentials):"
-        Write-Host '      $secret = Read-Host -Prompt "Client secret" -AsSecureString'
-        Write-Host '      Get-EntraIdentityBlastRadiusAssessment -ClientId <id> -ClientSecret $secret -TenantId <tid> ...'
-        Write-Host ""
-        Write-Host "    Mode 2 — Bring-Your-Own-Token (BYOT):"
-        Write-Host '      Get-EntraIdentityBlastRadiusAssessment -AccessToken $myToken -TenantId <tid> ...'
-        Write-Host ""
-        Write-Host "  Target identity (supply one):" -ForegroundColor Yellow
-        Write-Host "    -TargetUserPrincipalName  e.g. john.doe@contoso.com"
-        Write-Host "    -TargetIdentityId         Object ID GUID (User, Group, SP, or App)"
-        Write-Host ""
-        Write-Host "  Optional switches:" -ForegroundColor Yellow
-        Write-Host "    -IncludeEligibleRoles   Add PIM-eligible role assignments (needs Entra P2)"
-        Write-Host "    -IncludeAzureRBAC       Add Azure RBAC roles (needs Reader on subscription)"
-        Write-Host "    -SubscriptionId         Azure subscription ID for RBAC lookup"
-        Write-Host "    -GenerateDashboard      Produce the interactive HTML dashboard"
-        Write-Host "    -NoBrowserLaunch        Do not auto-open the dashboard after generation"
-        Write-Host "    -OutputPath             Where to write output files (default: C:\Temp\BlastRadius\)"
-        Write-Host ""
-        Write-Host "  Required Graph API permissions (Application, admin-consented):" -ForegroundColor Yellow
-        Write-Host "    User.Read.All, Group.Read.All, Directory.Read.All"
-        Write-Host "    Application.Read.All, RoleManagement.Read.Directory"
-        Write-Host "    AuditLog.Read.All, AppRoleAssignment.ReadWrite.All"
-        Write-Host ""
-        Write-Host "  For full documentation run:" -ForegroundColor Green
-        Write-Host "    Get-Help Get-EntraIdentityBlastRadiusAssessment -Full"
-        Write-Host ""
+      RequestAccessToken
+      return $global:accessToken
     }
-
-    if ($ShowHelp) {
-        Show-FriendlyHelp
-        return
+    Catch {
+      Write-Error "Failed to authenticate to Entra ID: $_"
+      return $null
     }
+  }
 
-    # Validate target identity — exactly one must be supplied
-    if (-not $TargetIdentityId -and -not $TargetUserPrincipalName) {
-        Write-Error "Supply either -TargetIdentityId or -TargetUserPrincipalName."
-        return
+  Function Test-GraphTokenPermissions {
+    param (
+      [string]$AccessToken,
+      [string[]]$RequiredPermissions
+    )
+
+    try {
+      $tokenParts = $AccessToken.Split(".")
+
+      if ($tokenParts.Count -ne 3) {
+        return @{
+          Valid              = $false
+          MissingPermissions = $RequiredPermissions
+        }
+      }
+
+      $payload = $tokenParts[1].Replace("-", "+").Replace("_", "/")
+
+      switch ($payload.Length % 4) {
+        2 { $payload += "==" }
+        3 { $payload += "=" }
+      }
+
+      $claims = [System.Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String($payload)
+      ) | ConvertFrom-Json
+
+      $tokenPermissions = @()
+
+      if ($claims.scp) {
+        $tokenPermissions += $claims.scp -split " "
+      }
+
+      if ($claims.roles) {
+        $tokenPermissions += @($claims.roles)
+      }
+
+      $missingPermissions = @(
+        $RequiredPermissions | Where-Object {
+          $_ -notin $tokenPermissions
+        }
+      )
+
+      return @{
+        Valid              = ($missingPermissions.Count -eq 0)
+        MissingPermissions = $missingPermissions
+      }
     }
-    if ($TargetIdentityId -and $TargetUserPrincipalName) {
-        Write-Error "-TargetIdentityId and -TargetUserPrincipalName are mutually exclusive. Supply only one."
-        return
+    catch {
+      return @{
+        Valid              = $false
+        MissingPermissions = $RequiredPermissions
+      }
     }
+  }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Token Management (Client Credentials path)
-    #  Identical pattern to reference script — RequestAccessToken / ShouldRenewToken
-    #  / RenewTokenIfNeeded live at script scope so they survive across function calls.
-    #─────────────────────────────────────────────────────────────────────────────
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Graph Helper
+  #─────────────────────────────────────────────────────────────────────────────
 
-    Function RequestAccessToken {
-        $tokenEndpoint = "https://login.microsoftonline.com/$global:TenantId/oauth2/v2.0/token"
+  Function Invoke-GraphRequest {
+    [CmdletBinding()]
+    param (
+      [Parameter(Mandatory = $true)]
+      [string]$Uri,
 
-        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($global:ClientSecretSecure)
+      [string]$Method = "GET",
+
+      [hashtable]$AdditionalHeaders = @{}
+    )
+
+    $allItems = New-Object System.Collections.ArrayList
+
+    do {
+      RenewTokenIfNeeded
+
+      $headers = @{ "Authorization" = "Bearer $global:accessToken"; "ConsistencyLevel" = "eventual" }
+      foreach ($key in $AdditionalHeaders.Keys) { $headers[$key] = $AdditionalHeaders[$key] }
+
+      $skip = $false
+      $response = $null
+
+      do {
         Try {
-            $plainSecret = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-
-            $body = @{
-                client_id     = $global:ClientId
-                client_secret = $plainSecret
-                scope         = "https://graph.microsoft.com/.default"
-                grant_type    = "client_credentials"
-            }
-            $resp = Invoke-RestMethod -Uri $tokenEndpoint -Method POST -Body $body -ErrorAction Stop
-            $global:accessToken = $resp.access_token
-            $global:tokenExpirationTime = (Get-Date).AddSeconds($resp.expires_in)
-        }
-        Finally {
-            if ($bstr -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-            $plainSecret = $null
-            $body = $null
-        }
-    }
-
-    Function ShouldRenewToken {
-        if (-not $global:accessToken -or -not $global:tokenExpirationTime) { return $true }
-        return (($global:tokenExpirationTime - (Get-Date)).TotalMinutes -lt $global:RefreshIntervalInMinutes)
-    }
-
-    Function RenewTokenIfNeeded {
-        if (ShouldRenewToken) {
-            Write-Host "  🔄 Refreshing access token..." -ForegroundColor Yellow
-            RequestAccessToken
-        }
-    }
-
-    Function Connect-EntraID {
-        param (
-            [Parameter(Mandatory = $true)] [string]$ClientId,
-            [Parameter(Mandatory = $true)] [System.Security.SecureString]$ClientSecret,
-            [Parameter(Mandatory = $true)] [string]$TenantId,
-            [int]$RefreshInterval = 15
-        )
-
-        Try {
-            $global:accessToken = $null
-            $global:tokenExpirationTime = $null
-            $global:RefreshIntervalInMinutes = $RefreshInterval
-            $global:TenantId = $TenantId
-            $global:ClientId = $ClientId
-            $global:ClientSecretSecure = $ClientSecret
-
-            RequestAccessToken
-            return $global:accessToken
+          $raw = Invoke-WebRequest -Uri $Uri -Headers $headers -Method $Method -ErrorAction Stop
+          $statusCode = $raw.StatusCode
         }
         Catch {
-            Write-Error "Failed to authenticate to Entra ID: $_"
-            return $null
+          $statusCode = $_.Exception.Response.StatusCode
+
+          if ($statusCode -eq 429) {
+            $retryAfter = $_.Exception.Response.Headers.Item("Retry-After")
+            if (-not $retryAfter) { $retryAfter = 10 }
+            Write-Host "  ⏸  Graph throttled — waiting $retryAfter s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $retryAfter
+          }
+          elseif ($statusCode -eq 403) {
+            Write-Warning "Graph returned 403 Forbidden for: $Uri — skipping (check API permissions)."
+            $skip = $true
+          }
+          elseif ($statusCode -eq 404) {
+            $skip = $true  # resource simply does not exist
+          }
+          else {
+            Write-Warning "Graph error $statusCode for $Uri — $($_.Exception.Message)"
+            $skip = $true
+          }
         }
+      } until (($statusCode -eq 200) -or $skip)
+
+      if ($skip -or -not $raw) { break }
+
+      $data = $raw.Content | ConvertFrom-Json
+
+      if ($data.PSObject.Properties['value']) {
+        $data.value | ForEach-Object { $null = $allItems.Add($_) }
+      }
+      else {
+        # Single-object response (e.g. /users/{id})
+        return $data
+      }
+
+      $Uri = if ($data.PSObject.Properties['@odata.nextLink']) { $data.'@odata.nextLink' } else { $null }
+
+    } until (-not $Uri)
+
+    return $allItems
+  }
+
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Risk Classification Engine
+  #─────────────────────────────────────────────────────────────────────────────
+
+  # Weighted blast-radius scoring table
+  # Each finding category carries a base weight; multiplied by a severity factor.
+  # Total score is clamped 0–100. Score bands:
+  #   0–20  → Green  (Minimal exposure)
+  #   21–40 → Blue   (Low)
+  #   41–60 → Amber  (Medium)
+  #   61–80 → Orange (High)
+  #   81–100→ Red    (Critical)
+
+  $script:RiskWeights = @{
+    # Directory roles
+    "Global Administrator"               = @{ Tier = "Critical"; Weight = 30 }
+    "Privileged Role Administrator"      = @{ Tier = "Critical"; Weight = 28 }
+    "Security Administrator"             = @{ Tier = "Critical"; Weight = 25 }
+    "Application Administrator"          = @{ Tier = "Critical"; Weight = 24 }
+    "Cloud Application Administrator"    = @{ Tier = "Critical"; Weight = 23 }
+    "Exchange Administrator"             = @{ Tier = "High"; Weight = 18 }
+    "SharePoint Administrator"           = @{ Tier = "High"; Weight = 18 }
+    "User Administrator"                 = @{ Tier = "High"; Weight = 16 }
+    "Authentication Administrator"       = @{ Tier = "High"; Weight = 16 }
+    "Conditional Access Administrator"   = @{ Tier = "High"; Weight = 15 }
+    "Intune Administrator"               = @{ Tier = "High"; Weight = 14 }
+    "Groups Administrator"               = @{ Tier = "Medium"; Weight = 10 }
+    "Teams Administrator"                = @{ Tier = "Medium"; Weight = 9 }
+    "Directory Readers"                  = @{ Tier = "Low"; Weight = 3 }
+
+    # App / OAuth scopes
+    "Directory.ReadWrite.All"            = @{ Tier = "Critical"; Weight = 28 }
+    "RoleManagement.ReadWrite.Directory" = @{ Tier = "Critical"; Weight = 27 }
+    "User.ReadWrite.All"                 = @{ Tier = "Critical"; Weight = 25 }
+    "Mail.ReadWrite"                     = @{ Tier = "High"; Weight = 18 }
+    "Files.ReadWrite.All"                = @{ Tier = "High"; Weight = 16 }
+    "Sites.FullControl.All"              = @{ Tier = "Critical"; Weight = 24 }
+    "offline_access"                     = @{ Tier = "Medium"; Weight = 8 }
+    "User.Read"                          = @{ Tier = "Low"; Weight = 2 }
+
+    # Azure RBAC
+    "Owner"                              = @{ Tier = "Critical"; Weight = 30 }
+    "Contributor"                        = @{ Tier = "High"; Weight = 20 }
+    "User Access Administrator"          = @{ Tier = "Critical"; Weight = 28 }
+    "Reader"                             = @{ Tier = "Low"; Weight = 3 }
+  }
+
+  Function Get-RiskTier {
+    param ([string]$Name)
+
+    $entry = $script:RiskWeights[$Name]
+    if ($entry) { return $entry.Tier }
+
+    # Heuristic fallback — broad wildcard scopes
+    if ($Name -match 'ReadWrite\.All|FullControl|\.All$') { return "High" }
+    if ($Name -match 'Read\.All') { return "Medium" }
+    return "Informational"
+  }
+
+  Function Get-RiskWeight {
+    param ([string]$Name)
+
+    $entry = $script:RiskWeights[$Name]
+    if ($entry) { return $entry.Weight }
+    if ($Name -match 'ReadWrite\.All|FullControl') { return 15 }
+    if ($Name -match 'Read\.All') { return 5 }
+    return 1
+  }
+
+  Function New-Finding {
+    param (
+      [string]$Layer,
+      [string]$AttackPath,
+      [string]$ResourceType,
+      [string]$ResourceName,
+      [string]$ResourceId,
+      [string]$Permission,
+      [string]$AssignmentType,
+      [string]$Evidence,
+      [string]$Remediation,
+      [int]$RemediationPriority,
+      [string]$RemediationOwner
+    )
+
+    $riskTier = Get-RiskTier   -Name $Permission
+    $riskWeight = Get-RiskWeight  -Name $Permission
+
+    return [PSCustomObject]@{
+      Layer               = $Layer
+      AttackPath          = $AttackPath
+      ResourceType        = $ResourceType
+      ResourceName        = $ResourceName
+      ResourceId          = $ResourceId
+      Permission          = $Permission
+      AssignmentType      = $AssignmentType
+      RiskTier            = $riskTier
+      RiskWeight          = $riskWeight
+      Evidence            = $Evidence
+      Remediation         = $Remediation
+      RemediationPriority = $RemediationPriority
+      RemediationOwner    = $RemediationOwner
+    }
+  }
+
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Evidence Collection Functions
+  #─────────────────────────────────────────────────────────────────────────────
+
+  Function Get-IdentityProfile {
+    [CmdletBinding()]
+    param (
+      [Parameter(Mandatory = $true)] [string]$ObjectId
+    )
+
+    Write-Verbose "Fetching identity profile for $ObjectId"
+
+    # Try user first, then service principal, then group
+    $profile = $null
+    $identityType = "Unknown"
+
+    Try {
+      $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$($ObjectId)?`$select=id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,onPremisesSyncEnabled,signInActivity,department,jobTitle,assignedLicenses"
+      if ($profile -and $profile.id) {
+        $identityType = "User"
+      }
+    }
+    Catch { }
+
+    if (-not $profile -or -not $profile.id) {
+      Try {
+        $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($ObjectId)?`$select=id,displayName,appId,servicePrincipalType,accountEnabled,createdDateTime,appOwnerOrganizationId"
+        if ($profile -and $profile.id) { $identityType = "ServicePrincipal" }
+      }
+      Catch { }
     }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Graph Helper
-    #─────────────────────────────────────────────────────────────────────────────
-
-    Function Invoke-GraphRequest {
-        [CmdletBinding()]
-        param (
-            [Parameter(Mandatory = $true)]
-            [string]$Uri,
-
-            [string]$Method = "GET",
-
-            [hashtable]$AdditionalHeaders = @{}
-        )
-
-        $allItems = New-Object System.Collections.ArrayList
-
-        do {
-            RenewTokenIfNeeded
-
-            $headers = @{ "Authorization" = "Bearer $global:accessToken"; "ConsistencyLevel" = "eventual" }
-            foreach ($key in $AdditionalHeaders.Keys) { $headers[$key] = $AdditionalHeaders[$key] }
-
-            $skip = $false
-            $response = $null
-
-            do {
-                Try {
-                    $raw = Invoke-WebRequest -Uri $Uri -Headers $headers -Method $Method -ErrorAction Stop
-                    $statusCode = $raw.StatusCode
-                }
-                Catch {
-                    $statusCode = $_.Exception.Response.StatusCode
-
-                    if ($statusCode -eq 429) {
-                        $retryAfter = $_.Exception.Response.Headers.Item("Retry-After")
-                        if (-not $retryAfter) { $retryAfter = 10 }
-                        Write-Host "  ⏸  Graph throttled — waiting $retryAfter s..." -ForegroundColor Yellow
-                        Start-Sleep -Seconds $retryAfter
-                    }
-                    elseif ($statusCode -eq 403) {
-                        Write-Warning "Graph returned 403 Forbidden for: $Uri — skipping (check API permissions)."
-                        $skip = $true
-                    }
-                    elseif ($statusCode -eq 404) {
-                        $skip = $true  # resource simply does not exist
-                    }
-                    else {
-                        Write-Warning "Graph error $statusCode for $Uri — $($_.Exception.Message)"
-                        $skip = $true
-                    }
-                }
-            } until (($statusCode -eq 200) -or $skip)
-
-            if ($skip -or -not $raw) { break }
-
-            $data = $raw.Content | ConvertFrom-Json
-
-            if ($data.PSObject.Properties['value']) {
-                $data.value | ForEach-Object { $null = $allItems.Add($_) }
-            }
-            else {
-                # Single-object response (e.g. /users/{id})
-                return $data
-            }
-
-            $Uri = if ($data.PSObject.Properties['@odata.nextLink']) { $data.'@odata.nextLink' } else { $null }
-
-        } until (-not $Uri)
-
-        return $allItems
+    if (-not $profile -or -not $profile.id) {
+      Try {
+        $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/groups/$($ObjectId)?`$select=id,displayName,groupTypes,securityEnabled,mailEnabled,membershipRule,isAssignableToRole"
+        if ($profile -and $profile.id) { $identityType = "Group" }
+      }
+      Catch { }
     }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Risk Classification Engine
-    #─────────────────────────────────────────────────────────────────────────────
-
-    # Weighted blast-radius scoring table
-    # Each finding category carries a base weight; multiplied by a severity factor.
-    # Total score is clamped 0–100. Score bands:
-    #   0–20  → Green  (Minimal exposure)
-    #   21–40 → Blue   (Low)
-    #   41–60 → Amber  (Medium)
-    #   61–80 → Orange (High)
-    #   81–100→ Red    (Critical)
-
-    $script:RiskWeights = @{
-        # Directory roles
-        "Global Administrator"               = @{ Tier = "Critical"; Weight = 30 }
-        "Privileged Role Administrator"      = @{ Tier = "Critical"; Weight = 28 }
-        "Security Administrator"             = @{ Tier = "Critical"; Weight = 25 }
-        "Application Administrator"          = @{ Tier = "Critical"; Weight = 24 }
-        "Cloud Application Administrator"    = @{ Tier = "Critical"; Weight = 23 }
-        "Exchange Administrator"             = @{ Tier = "High"; Weight = 18 }
-        "SharePoint Administrator"           = @{ Tier = "High"; Weight = 18 }
-        "User Administrator"                 = @{ Tier = "High"; Weight = 16 }
-        "Authentication Administrator"       = @{ Tier = "High"; Weight = 16 }
-        "Conditional Access Administrator"   = @{ Tier = "High"; Weight = 15 }
-        "Intune Administrator"               = @{ Tier = "High"; Weight = 14 }
-        "Groups Administrator"               = @{ Tier = "Medium"; Weight = 10 }
-        "Teams Administrator"                = @{ Tier = "Medium"; Weight = 9 }
-        "Directory Readers"                  = @{ Tier = "Low"; Weight = 3 }
-
-        # App / OAuth scopes
-        "Directory.ReadWrite.All"            = @{ Tier = "Critical"; Weight = 28 }
-        "RoleManagement.ReadWrite.Directory" = @{ Tier = "Critical"; Weight = 27 }
-        "User.ReadWrite.All"                 = @{ Tier = "Critical"; Weight = 25 }
-        "Mail.ReadWrite"                     = @{ Tier = "High"; Weight = 18 }
-        "Files.ReadWrite.All"                = @{ Tier = "High"; Weight = 16 }
-        "Sites.FullControl.All"              = @{ Tier = "Critical"; Weight = 24 }
-        "offline_access"                     = @{ Tier = "Medium"; Weight = 8 }
-        "User.Read"                          = @{ Tier = "Low"; Weight = 2 }
-
-        # Azure RBAC
-        "Owner"                              = @{ Tier = "Critical"; Weight = 30 }
-        "Contributor"                        = @{ Tier = "High"; Weight = 20 }
-        "User Access Administrator"          = @{ Tier = "Critical"; Weight = 28 }
-        "Reader"                             = @{ Tier = "Low"; Weight = 3 }
+    if (-not $profile -or -not $profile.id) {
+      Try {
+        $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/applications/$($ObjectId)?`$select=id,displayName,appId,createdDateTime,publisherDomain,signInAudience"
+        if ($profile -and $profile.id) { $identityType = "Application" }
+      }
+      Catch { }
     }
 
-    Function Get-RiskTier {
-        param ([string]$Name)
+    return [PSCustomObject]@{
+      Profile      = $profile
+      IdentityType = $identityType
+    }
+  }
 
-        $entry = $script:RiskWeights[$Name]
-        if ($entry) { return $entry.Tier }
+  Function Resolve-UPNToObjectId {
+    [CmdletBinding()]
+    param ([string]$UserPrincipalName)
 
-        # Heuristic fallback — broad wildcard scopes
-        if ($Name -match 'ReadWrite\.All|FullControl|\.All$') { return "High" }
-        if ($Name -match 'Read\.All') { return "Medium" }
-        return "Informational"
+    $user = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$([System.Uri]::EscapeDataString($UserPrincipalName))?`$select=id,displayName,userPrincipalName"
+    if ($user -and $user.id) { return $user.id }
+    return $null
+  }
+
+  Function Get-GroupMemberships {
+    [CmdletBinding()]
+    param (
+      [string]$ObjectId,
+      [string]$IdentityType
+    )
+
+    $endpoint = switch ($IdentityType) {
+      "User" { "https://graph.microsoft.com/beta/users/$ObjectId/transitiveMemberOf?`$select=id,displayName,groupTypes,securityEnabled,isAssignableToRole" }
+      "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/transitiveMemberOf?`$select=id,displayName,groupTypes,securityEnabled,isAssignableToRole" }
+      default { $null }
     }
 
-    Function Get-RiskWeight {
-        param ([string]$Name)
+    if (-not $endpoint) { return @() }
+    return Invoke-GraphRequest -Uri $endpoint
+  }
 
-        $entry = $script:RiskWeights[$Name]
-        if ($entry) { return $entry.Weight }
-        if ($Name -match 'ReadWrite\.All|FullControl') { return 15 }
-        if ($Name -match 'Read\.All') { return 5 }
-        return 1
-    }
+  Function Get-DirectoryRoleAssignments {
+    [CmdletBinding()]
+    param (
+      [string]$ObjectId,
+      [switch]$IncludeEligible
+    )
 
-    Function New-Finding {
-        param (
-            [string]$Layer,
-            [string]$AttackPath,
-            [string]$ResourceType,
-            [string]$ResourceName,
-            [string]$ResourceId,
-            [string]$Permission,
-            [string]$AssignmentType,
-            [string]$Evidence,
-            [string]$Remediation,
-            [int]$RemediationPriority,
-            [string]$RemediationOwner
-        )
+    $findings = New-Object System.Collections.ArrayList
 
-        $riskTier = Get-RiskTier   -Name $Permission
-        $riskWeight = Get-RiskWeight  -Name $Permission
-
-        return [PSCustomObject]@{
-            Layer               = $Layer
-            AttackPath          = $AttackPath
-            ResourceType        = $ResourceType
-            ResourceName        = $ResourceName
-            ResourceId          = $ResourceId
-            Permission          = $Permission
-            AssignmentType      = $AssignmentType
-            RiskTier            = $riskTier
-            RiskWeight          = $riskWeight
-            Evidence            = $Evidence
-            Remediation         = $Remediation
-            RemediationPriority = $RemediationPriority
-            RemediationOwner    = $RemediationOwner
+    # Role definitions — one call (cache for this run)
+    if (-not $script:RoleDefinitionCache) {
+      $script:RoleDefinitionCache = @{}
+      $defs = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleDefinitions?`$select=id,displayName,isPrivileged"
+      foreach ($d in $defs) {
+        $script:RoleDefinitionCache[$d.id] = [PSCustomObject]@{
+          DisplayName  = $d.displayName
+          IsPrivileged = [bool]$d.isPrivileged
         }
+      }
     }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Evidence Collection Functions
-    #─────────────────────────────────────────────────────────────────────────────
+    # Active assignments
+    Try {
+      $activeAssignments = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleAssignmentScheduleInstances?`$filter=principalId eq '$ObjectId'&`$select=principalId,roleDefinitionId,directoryScopeId,assignmentType"
+      foreach ($a in $activeAssignments) {
+        $def = $script:RoleDefinitionCache[$a.roleDefinitionId]
+        $name = if ($def) { $def.DisplayName } else { $a.roleDefinitionId }
+        $scope = if ($a.directoryScopeId -eq "/") { "Tenant-Wide" } else { $a.directoryScopeId }
 
-    Function Get-IdentityProfile {
-        [CmdletBinding()]
-        param (
-            [Parameter(Mandatory = $true)] [string]$ObjectId
+        $remediationPriority = if ((Get-RiskTier -Name $name) -in @("Critical", "High")) { 1 } else { 2 }
+
+        $null = $findings.Add(
+          (New-Finding `
+            -Layer             "DirectoryRole" `
+            -AttackPath        "Identity → DirectoryRole → $name ($scope)" `
+            -ResourceType      "DirectoryRole" `
+            -ResourceName      $name `
+            -ResourceId        $a.roleDefinitionId `
+            -Permission        $name `
+            -AssignmentType    "Active" `
+            -Evidence          "principalId=$ObjectId assigned roleDefinitionId=$($a.roleDefinitionId) scope=$scope" `
+            -Remediation       "Remove active role assignment '$name'. If required, convert to PIM-eligible and require justification + MFA to activate." `
+            -RemediationPriority $remediationPriority `
+            -RemediationOwner  "Identity & Access Management Team"
+                )
         )
+      }
+    }
+    Catch {
+      Write-Warning "Could not retrieve active role assignments: $($_.Exception.Message)"
+    }
 
-        Write-Verbose "Fetching identity profile for $ObjectId"
+    # Eligible assignments (PIM)
+    if ($IncludeEligible) {
+      Try {
+        $eligAssignments = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=principalId eq '$ObjectId'&`$select=principalId,roleDefinitionId,directoryScopeId"
+        foreach ($e in $eligAssignments) {
+          $def = $script:RoleDefinitionCache[$e.roleDefinitionId]
+          $name = if ($def) { $def.DisplayName } else { $e.roleDefinitionId }
+          $scope = if ($e.directoryScopeId -eq "/") { "Tenant-Wide" } else { $e.directoryScopeId }
 
-        # Try user first, then service principal, then group
-        $profile = $null
-        $identityType = "Unknown"
+          $null = $findings.Add(
+            (New-Finding `
+              -Layer             "DirectoryRole" `
+              -AttackPath        "Identity → PIM-EligibleRole → $name ($scope)" `
+              -ResourceType      "DirectoryRole (Eligible)" `
+              -ResourceName      $name `
+              -ResourceId        $e.roleDefinitionId `
+              -Permission        $name `
+              -AssignmentType    "Eligible" `
+              -Evidence          "principalId=$ObjectId eligible roleDefinitionId=$($e.roleDefinitionId) scope=$scope" `
+              -Remediation       "Review PIM-eligible assignment '$name'. Enforce approval workflow, time-bound activations (max 4 hr), and MFA on activation." `
+              -RemediationPriority 3 `
+              -RemediationOwner  "Identity & Access Management Team"
+                    )
+          )
+        }
+      }
+      Catch {
+        Write-Warning "Could not retrieve PIM-eligible role assignments (Entra P2 required): $($_.Exception.Message)"
+      }
+    }
+
+    return $findings
+  }
+
+  Function Get-AppRoleAssignments {
+    [CmdletBinding()]
+    param (
+      [string]$ObjectId,
+      [string]$IdentityType
+    )
+
+    $findings = New-Object System.Collections.ArrayList
+
+    # App role assignments received by this identity (what apps it can call)
+    $endpoint = switch ($IdentityType) {
+      "User" { "https://graph.microsoft.com/beta/users/$ObjectId/appRoleAssignments" }
+      "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/appRoleAssignments" }
+      default { $null }
+    }
+
+    if (-not $endpoint) { return $findings }
+
+    Try {
+      $assignments = Invoke-GraphRequest -Uri $endpoint
+      foreach ($a in $assignments) {
+        # Look up the resource service principal to get the role name
+        $roleName = $a.roleId
+        Try {
+          $resourceSp = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($a.resourceId)?`$select=displayName,appRoles"
+          $roleObj = $resourceSp.appRoles | Where-Object { $_.id -eq $a.roleId }
+          $roleName = if ($roleObj) { $roleObj.value } else { $a.roleId }
+          $resourceName = $resourceSp.displayName
+        }
+        Catch { $resourceName = $a.resourceId }
+
+        $remediationPriority = if ((Get-RiskTier -Name $roleName) -in @("Critical", "High")) { 1 } else { 3 }
+
+        $null = $findings.Add(
+          (New-Finding `
+            -Layer             "AppRoleAssignment" `
+            -AttackPath        "Identity → AppRole → $resourceName → $roleName" `
+            -ResourceType      "Application" `
+            -ResourceName      $resourceName `
+            -ResourceId        $a.resourceId `
+            -Permission        $roleName `
+            -AssignmentType    "AppRole" `
+            -Evidence          "principalId=$ObjectId resourceId=$($a.resourceId) roleId=$($a.roleId)" `
+            -Remediation       "Audit whether '$roleName' on '$resourceName' is still required. Remove if unused for >90 days. Apply least-privilege alternative." `
+            -RemediationPriority $remediationPriority `
+            -RemediationOwner  "Application Security Team"
+                )
+        )
+      }
+    }
+    Catch {
+      Write-Warning "Could not retrieve app role assignments: $($_.Exception.Message)"
+    }
+
+    return $findings
+  }
+
+  Function Get-DelegatedPermissions {
+    [CmdletBinding()]
+    param (
+      [string]$ObjectId,
+      [string]$IdentityType
+    )
+
+    $findings = New-Object System.Collections.ArrayList
+
+    if ($IdentityType -ne "User") { return $findings }
+
+    # OAuth2 permission grants (delegated, user-consented)
+    Try {
+      $grants = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/oauth2PermissionGrants?`$filter=principalId eq '$ObjectId'"
+      foreach ($g in $grants) {
+        $scopes = ($g.scope -split ' ') | Where-Object { $_ }
+        $resourceName = $g.resourceId
 
         Try {
-            $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$($ObjectId)?`$select=id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,onPremisesSyncEnabled,signInActivity,department,jobTitle,assignedLicenses"
-            if ($profile -and $profile.id) {
-                $identityType = "User"
-            }
+          $resourceSp = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($g.resourceId)?`$select=displayName"
+          $resourceName = $resourceSp.displayName
         }
         Catch { }
 
-        if (-not $profile -or -not $profile.id) {
-            Try {
-                $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($ObjectId)?`$select=id,displayName,appId,servicePrincipalType,accountEnabled,createdDateTime,appOwnerOrganizationId"
-                if ($profile -and $profile.id) { $identityType = "ServicePrincipal" }
-            }
-            Catch { }
-        }
+        $remediationPriority = if ((Get-RiskTier -Name $scope) -in @("Critical", "High")) { 1 } else { 3 }
 
-        if (-not $profile -or -not $profile.id) {
-            Try {
-                $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/groups/$($ObjectId)?`$select=id,displayName,groupTypes,securityEnabled,mailEnabled,membershipRule,isAssignableToRole"
-                if ($profile -and $profile.id) { $identityType = "Group" }
-            }
-            Catch { }
-        }
-
-        if (-not $profile -or -not $profile.id) {
-            Try {
-                $profile = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/applications/$($ObjectId)?`$select=id,displayName,appId,createdDateTime,publisherDomain,signInAudience"
-                if ($profile -and $profile.id) { $identityType = "Application" }
-            }
-            Catch { }
-        }
-
-        return [PSCustomObject]@{
-            Profile      = $profile
-            IdentityType = $identityType
-        }
-    }
-
-    Function Resolve-UPNToObjectId {
-        [CmdletBinding()]
-        param ([string]$UserPrincipalName)
-
-        $user = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$([System.Uri]::EscapeDataString($UserPrincipalName))?`$select=id,displayName,userPrincipalName"
-        if ($user -and $user.id) { return $user.id }
-        return $null
-    }
-
-    Function Get-GroupMemberships {
-        [CmdletBinding()]
-        param (
-            [string]$ObjectId,
-            [string]$IdentityType
-        )
-
-        $endpoint = switch ($IdentityType) {
-            "User" { "https://graph.microsoft.com/beta/users/$ObjectId/transitiveMemberOf?`$select=id,displayName,groupTypes,securityEnabled,isAssignableToRole" }
-            "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/transitiveMemberOf?`$select=id,displayName,groupTypes,securityEnabled,isAssignableToRole" }
-            default { $null }
-        }
-
-        if (-not $endpoint) { return @() }
-        return Invoke-GraphRequest -Uri $endpoint
-    }
-
-    Function Get-DirectoryRoleAssignments {
-        [CmdletBinding()]
-        param (
-            [string]$ObjectId,
-            [switch]$IncludeEligible
-        )
-
-        $findings = New-Object System.Collections.ArrayList
-
-        # Role definitions — one call (cache for this run)
-        if (-not $script:RoleDefinitionCache) {
-            $script:RoleDefinitionCache = @{}
-            $defs = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleDefinitions?`$select=id,displayName,isPrivileged"
-            foreach ($d in $defs) {
-                $script:RoleDefinitionCache[$d.id] = [PSCustomObject]@{
-                    DisplayName  = $d.displayName
-                    IsPrivileged = [bool]$d.isPrivileged
-                }
-            }
-        }
-
-        # Active assignments
-        Try {
-            $activeAssignments = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleAssignmentScheduleInstances?`$filter=principalId eq '$ObjectId'&`$select=principalId,roleDefinitionId,directoryScopeId,assignmentType"
-            foreach ($a in $activeAssignments) {
-                $def = $script:RoleDefinitionCache[$a.roleDefinitionId]
-                $name = if ($def) { $def.DisplayName } else { $a.roleDefinitionId }
-                $scope = if ($a.directoryScopeId -eq "/") { "Tenant-Wide" } else { $a.directoryScopeId }
-
-                $remediationPriority = if ((Get-RiskTier -Name $name) -in @("Critical", "High")) { 1 } else { 2 }
-
-                $null = $findings.Add(
-                    (New-Finding `
-                        -Layer             "DirectoryRole" `
-                        -AttackPath        "Identity → DirectoryRole → $name ($scope)" `
-                        -ResourceType      "DirectoryRole" `
-                        -ResourceName      $name `
-                        -ResourceId        $a.roleDefinitionId `
-                        -Permission        $name `
-                        -AssignmentType    "Active" `
-                        -Evidence          "principalId=$ObjectId assigned roleDefinitionId=$($a.roleDefinitionId) scope=$scope" `
-                        -Remediation       "Remove active role assignment '$name'. If required, convert to PIM-eligible and require justification + MFA to activate." `
-                        -RemediationPriority $remediationPriority `
-                        -RemediationOwner  "Identity & Access Management Team"
-                )
-                )
-            }
-        }
-        Catch {
-            Write-Warning "Could not retrieve active role assignments: $($_.Exception.Message)"
-        }
-
-        # Eligible assignments (PIM)
-        if ($IncludeEligible) {
-            Try {
-                $eligAssignments = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=principalId eq '$ObjectId'&`$select=principalId,roleDefinitionId,directoryScopeId"
-                foreach ($e in $eligAssignments) {
-                    $def = $script:RoleDefinitionCache[$e.roleDefinitionId]
-                    $name = if ($def) { $def.DisplayName } else { $e.roleDefinitionId }
-                    $scope = if ($e.directoryScopeId -eq "/") { "Tenant-Wide" } else { $e.directoryScopeId }
-
-                    $null = $findings.Add(
-                        (New-Finding `
-                            -Layer             "DirectoryRole" `
-                            -AttackPath        "Identity → PIM-EligibleRole → $name ($scope)" `
-                            -ResourceType      "DirectoryRole (Eligible)" `
-                            -ResourceName      $name `
-                            -ResourceId        $e.roleDefinitionId `
-                            -Permission        $name `
-                            -AssignmentType    "Eligible" `
-                            -Evidence          "principalId=$ObjectId eligible roleDefinitionId=$($e.roleDefinitionId) scope=$scope" `
-                            -Remediation       "Review PIM-eligible assignment '$name'. Enforce approval workflow, time-bound activations (max 4 hr), and MFA on activation." `
-                            -RemediationPriority 3 `
-                            -RemediationOwner  "Identity & Access Management Team"
+        foreach ($scope in $scopes) {
+          $null = $findings.Add(
+            (New-Finding `
+              -Layer             "DelegatedPermission" `
+              -AttackPath        "Identity → DelegatedOAuth2 → $resourceName → $scope" `
+              -ResourceType      "Application" `
+              -ResourceName      $resourceName `
+              -ResourceId        $g.resourceId `
+              -Permission        $scope `
+              -AssignmentType    "Delegated ($($g.consentType))" `
+              -Evidence          "principalId=$ObjectId consentType=$($g.consentType) scope=$scope resourceId=$($g.resourceId)" `
+              -Remediation       "Revoke delegated '$scope' consent on '$resourceName'. Re-consent with narrower scope if still needed. Review All-Principal consents." `
+              -RemediationPriority $remediationPriority `
+              -RemediationOwner  "Application Security Team"
                     )
-                    )
-                }
-            }
-            Catch {
-                Write-Warning "Could not retrieve PIM-eligible role assignments (Entra P2 required): $($_.Exception.Message)"
-            }
+          )
         }
-
-        return $findings
+      }
+    }
+    Catch {
+      Write-Warning "Could not retrieve delegated permission grants: $($_.Exception.Message)"
     }
 
-    Function Get-AppRoleAssignments {
-        [CmdletBinding()]
-        param (
-            [string]$ObjectId,
-            [string]$IdentityType
+    return $findings
+  }
+
+  Function Get-OwnedObjects {
+    [CmdletBinding()]
+    param (
+      [string]$ObjectId,
+      [string]$IdentityType
+    )
+
+    $findings = New-Object System.Collections.ArrayList
+
+    $endpoint = switch ($IdentityType) {
+      # "User" { "https://graph.microsoft.com/beta/users/$ObjectId/ownedObjects?`$select=id,displayName,@odata.type" }
+      # "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/ownedObjects?`$select=id,displayName,@odata.type" }
+
+      "User" { "https://graph.microsoft.com/beta/users/$ObjectId/ownedObjects?`$select=id,displayName" }
+      "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/ownedObjects?`$select=id,displayName" }
+      default { $null }
+    }
+
+    if (-not $endpoint) { return $findings }
+
+    Try {
+      $owned = Invoke-GraphRequest -Uri $endpoint
+      foreach ($o in $owned) {
+        $type = $o.'@odata.type' -replace '#microsoft.graph.', ''
+
+        $null = $findings.Add(
+          (New-Finding `
+            -Layer             "OwnedObject" `
+            -AttackPath        "Identity → Owns → $type → $($o.displayName)" `
+            -ResourceType      $type `
+            -ResourceName      $o.displayName `
+            -ResourceId        $o.id `
+            -Permission        "Owner" `
+            -AssignmentType    "Ownership" `
+            -Evidence          "principalId=$ObjectId ownsObjectId=$($o.id) type=$type" `
+            -Remediation       "Review ownership of '$($o.displayName)' ($type). Ownership grants full control. Remove if not required or reassign to a break-glass account." `
+            -RemediationPriority 2 `
+            -RemediationOwner  "Application Security Team"
+                )
         )
-
-        $findings = New-Object System.Collections.ArrayList
-
-        # App role assignments received by this identity (what apps it can call)
-        $endpoint = switch ($IdentityType) {
-            "User" { "https://graph.microsoft.com/beta/users/$ObjectId/appRoleAssignments" }
-            "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/appRoleAssignments" }
-            default { $null }
-        }
-
-        if (-not $endpoint) { return $findings }
-
-        Try {
-            $assignments = Invoke-GraphRequest -Uri $endpoint
-            foreach ($a in $assignments) {
-                # Look up the resource service principal to get the role name
-                $roleName = $a.roleId
-                Try {
-                    $resourceSp = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($a.resourceId)?`$select=displayName,appRoles"
-                    $roleObj = $resourceSp.appRoles | Where-Object { $_.id -eq $a.roleId }
-                    $roleName = if ($roleObj) { $roleObj.value } else { $a.roleId }
-                    $resourceName = $resourceSp.displayName
-                }
-                Catch { $resourceName = $a.resourceId }
-
-                $remediationPriority = if ((Get-RiskTier -Name $roleName) -in @("Critical", "High")) { 1 } else { 3 }
-
-                $null = $findings.Add(
-                    (New-Finding `
-                        -Layer             "AppRoleAssignment" `
-                        -AttackPath        "Identity → AppRole → $resourceName → $roleName" `
-                        -ResourceType      "Application" `
-                        -ResourceName      $resourceName `
-                        -ResourceId        $a.resourceId `
-                        -Permission        $roleName `
-                        -AssignmentType    "AppRole" `
-                        -Evidence          "principalId=$ObjectId resourceId=$($a.resourceId) roleId=$($a.roleId)" `
-                        -Remediation       "Audit whether '$roleName' on '$resourceName' is still required. Remove if unused for >90 days. Apply least-privilege alternative." `
-                        -RemediationPriority $remediationPriority `
-                        -RemediationOwner  "Application Security Team"
-                )
-                )
-            }
-        }
-        Catch {
-            Write-Warning "Could not retrieve app role assignments: $($_.Exception.Message)"
-        }
-
-        return $findings
+      }
+    }
+    Catch {
+      Write-Warning "Could not retrieve owned objects: $($_.Exception.Message)"
     }
 
-    Function Get-DelegatedPermissions {
-        [CmdletBinding()]
-        param (
-            [string]$ObjectId,
-            [string]$IdentityType
+    return $findings
+  }
+
+  Function Get-OwnedDevices {
+    [CmdletBinding()]
+    param ([string]$ObjectId)
+
+    $findings = New-Object System.Collections.ArrayList
+
+    Try {
+      $devices = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$ObjectId/ownedDevices?`$select=id,displayName,operatingSystem,complianceState,isManaged,registrationDateTime"
+      foreach ($d in $devices) {
+        $null = $findings.Add(
+          (New-Finding `
+            -Layer             "OwnedDevice" `
+            -AttackPath        "Identity → Device → $($d.displayName) ($($d.operatingSystem))" `
+            -ResourceType      "Device" `
+            -ResourceName      $d.displayName `
+            -ResourceId        $d.id `
+            -Permission        "DeviceOwner" `
+            -AssignmentType    "Device Ownership" `
+            -Evidence          "ownedDeviceId=$($d.id) OS=$($d.operatingSystem) Compliant=$($d.complianceState) Managed=$($d.isManaged)" `
+            -Remediation       "Ensure device '$($d.displayName)' is compliant and managed. Enforce Conditional Access device compliance policy." `
+            -RemediationPriority 3 `
+            -RemediationOwner  "Endpoint Security Team"
+                )
         )
-
-        $findings = New-Object System.Collections.ArrayList
-
-        if ($IdentityType -ne "User") { return $findings }
-
-        # OAuth2 permission grants (delegated, user-consented)
-        Try {
-            $grants = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/oauth2PermissionGrants?`$filter=principalId eq '$ObjectId'"
-            foreach ($g in $grants) {
-                $scopes = ($g.scope -split ' ') | Where-Object { $_ }
-                $resourceName = $g.resourceId
-
-                Try {
-                    $resourceSp = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($g.resourceId)?`$select=displayName"
-                    $resourceName = $resourceSp.displayName
-                }
-                Catch { }
-
-                $remediationPriority = if ((Get-RiskTier -Name $scope) -in @("Critical", "High")) { 1 } else { 3 }
-
-                foreach ($scope in $scopes) {
-                    $null = $findings.Add(
-                        (New-Finding `
-                            -Layer             "DelegatedPermission" `
-                            -AttackPath        "Identity → DelegatedOAuth2 → $resourceName → $scope" `
-                            -ResourceType      "Application" `
-                            -ResourceName      $resourceName `
-                            -ResourceId        $g.resourceId `
-                            -Permission        $scope `
-                            -AssignmentType    "Delegated ($($g.consentType))" `
-                            -Evidence          "principalId=$ObjectId consentType=$($g.consentType) scope=$scope resourceId=$($g.resourceId)" `
-                            -Remediation       "Revoke delegated '$scope' consent on '$resourceName'. Re-consent with narrower scope if still needed. Review All-Principal consents." `
-                            -RemediationPriority $remediationPriority `
-                            -RemediationOwner  "Application Security Team"
-                    )
-                    )
-                }
-            }
-        }
-        Catch {
-            Write-Warning "Could not retrieve delegated permission grants: $($_.Exception.Message)"
-        }
-
-        return $findings
+      }
+    }
+    Catch {
+      Write-Warning "Could not retrieve owned devices: $($_.Exception.Message)"
     }
 
-    Function Get-OwnedObjects {
-        [CmdletBinding()]
-        param (
-            [string]$ObjectId,
-            [string]$IdentityType
+    return $findings
+  }
+
+  Function Get-AzureRBACAssignments {
+    [CmdletBinding()]
+    param (
+      [string]$ObjectId,
+      [string]$SubscriptionId
+    )
+
+    $findings = New-Object System.Collections.ArrayList
+
+    if (-not $SubscriptionId) {
+      Write-Warning "No SubscriptionId supplied and AZURE_SUBSCRIPTION_ID env var not set — skipping Azure RBAC collection."
+      return $findings
+    }
+
+    $armToken = $null
+
+    # Try to swap Graph token for ARM token (only if client-credential mode)
+    if ($global:ClientId -and $global:ClientSecretSecure) {
+      $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($global:ClientSecretSecure)
+      Try {
+        $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        $body = @{
+          client_id     = $global:ClientId
+          client_secret = $plain
+          scope         = "https://management.azure.com/.default"
+          grant_type    = "client_credentials"
+        }
+        $tokenResp = Invoke-RestMethod -Uri "https://login.microsoftonline.com/$global:TenantId/oauth2/v2.0/token" -Method POST -Body $body -ErrorAction Stop
+        $armToken = $tokenResp.access_token
+      }
+      Finally {
+        if ($bstr -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        $plain = $null
+        $body = $null
+      }
+    }
+
+    if (-not $armToken) {
+      Write-Warning "Could not obtain an ARM token for Azure RBAC lookup — skipping. In BYOT mode supply an ARM-scoped token or use client-credential mode."
+      return $findings
+    }
+
+    Try {
+      $armHeaders = @{ "Authorization" = "Bearer $armToken" }
+      $uri = "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&`$filter=principalId eq '$ObjectId'"
+      $rbacResp = Invoke-RestMethod -Uri $uri -Headers $armHeaders -Method GET -ErrorAction Stop
+
+      foreach ($ra in $rbacResp.value) {
+        # Resolve role definition name
+        $roleName = $ra.properties.roleDefinitionId
+        Try {
+          $roleDefUri = "https://management.azure.com$($ra.properties.roleDefinitionId)?api-version=2022-04-01"
+          $roleDefResp = Invoke-RestMethod -Uri $roleDefUri -Headers $armHeaders -Method GET -ErrorAction Stop
+          $roleName = $roleDefResp.properties.roleName
+        }
+        Catch { }
+
+        $scope = $ra.properties.scope
+
+        $remediationPriority = if ((Get-RiskTier -Name $roleName) -in @("Critical", "High")) { 1 } else { 2 }
+
+        $null = $findings.Add(
+          (New-Finding `
+            -Layer             "AzureRBAC" `
+            -AttackPath        "Identity → AzureRBAC → $roleName → $scope" `
+            -ResourceType      "AzureSubscription" `
+            -ResourceName      "Subscription: $SubscriptionId" `
+            -ResourceId        $ra.id `
+            -Permission        $roleName `
+            -AssignmentType    "AzureRBAC" `
+            -Evidence          "principalId=$ObjectId roleAssignmentId=$($ra.id) scope=$scope" `
+            -Remediation       "Review Azure RBAC '$roleName' at scope '$scope'. Downscope to minimum required. Use PIM for Just-In-Time Azure role activation." `
+            -RemediationPriority $remediationPriority `
+            -RemediationOwner  "Cloud Platform Security Team"
+                )
         )
-
-        $findings = New-Object System.Collections.ArrayList
-
-        $endpoint = switch ($IdentityType) {
-            # "User" { "https://graph.microsoft.com/beta/users/$ObjectId/ownedObjects?`$select=id,displayName,@odata.type" }
-            # "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/ownedObjects?`$select=id,displayName,@odata.type" }
-
-            "User" { "https://graph.microsoft.com/beta/users/$ObjectId/ownedObjects?`$select=id,displayName" }
-            "ServicePrincipal" { "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/ownedObjects?`$select=id,displayName" }
-            default { $null }
-        }
-
-        if (-not $endpoint) { return $findings }
-
-        Try {
-            $owned = Invoke-GraphRequest -Uri $endpoint
-            foreach ($o in $owned) {
-                $type = $o.'@odata.type' -replace '#microsoft.graph.', ''
-
-                $null = $findings.Add(
-                    (New-Finding `
-                        -Layer             "OwnedObject" `
-                        -AttackPath        "Identity → Owns → $type → $($o.displayName)" `
-                        -ResourceType      $type `
-                        -ResourceName      $o.displayName `
-                        -ResourceId        $o.id `
-                        -Permission        "Owner" `
-                        -AssignmentType    "Ownership" `
-                        -Evidence          "principalId=$ObjectId ownsObjectId=$($o.id) type=$type" `
-                        -Remediation       "Review ownership of '$($o.displayName)' ($type). Ownership grants full control. Remove if not required or reassign to a break-glass account." `
-                        -RemediationPriority 2 `
-                        -RemediationOwner  "Application Security Team"
-                )
-                )
-            }
-        }
-        Catch {
-            Write-Warning "Could not retrieve owned objects: $($_.Exception.Message)"
-        }
-
-        return $findings
+      }
+    }
+    Catch {
+      Write-Warning "Azure RBAC lookup failed: $($_.Exception.Message)"
     }
 
-    Function Get-OwnedDevices {
-        [CmdletBinding()]
-        param ([string]$ObjectId)
+    return $findings
+  }
 
-        $findings = New-Object System.Collections.ArrayList
+  Function Get-ServicePrincipalAppPermissions {
+    [CmdletBinding()]
+    param ([string]$ObjectId)
+
+    # For Service Principals: get the application permissions (app roles assigned TO this SP)
+    $findings = New-Object System.Collections.ArrayList
+
+    Try {
+      $assignments = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/appRoleAssignments"
+      foreach ($a in $assignments) {
+        $roleName = $a.roleId
+        $resourceName = $a.resourceId
 
         Try {
-            $devices = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$ObjectId/ownedDevices?`$select=id,displayName,operatingSystem,complianceState,isManaged,registrationDateTime"
-            foreach ($d in $devices) {
-                $null = $findings.Add(
-                    (New-Finding `
-                        -Layer             "OwnedDevice" `
-                        -AttackPath        "Identity → Device → $($d.displayName) ($($d.operatingSystem))" `
-                        -ResourceType      "Device" `
-                        -ResourceName      $d.displayName `
-                        -ResourceId        $d.id `
-                        -Permission        "DeviceOwner" `
-                        -AssignmentType    "Device Ownership" `
-                        -Evidence          "ownedDeviceId=$($d.id) OS=$($d.operatingSystem) Compliant=$($d.complianceState) Managed=$($d.isManaged)" `
-                        -Remediation       "Ensure device '$($d.displayName)' is compliant and managed. Enforce Conditional Access device compliance policy." `
-                        -RemediationPriority 3 `
-                        -RemediationOwner  "Endpoint Security Team"
-                )
-                )
-            }
+          $resourceSp = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($a.resourceId)?`$select=displayName,appRoles"
+          $roleObj = $resourceSp.appRoles | Where-Object { $_.id -eq $a.roleId }
+          $roleName = if ($roleObj) { $roleObj.value } else { $a.roleId }
+          $resourceName = $resourceSp.displayName
         }
-        Catch {
-            Write-Warning "Could not retrieve owned devices: $($_.Exception.Message)"
-        }
+        Catch { }
 
-        return $findings
-    }
+        $remediationPriority = if ((Get-RiskTier -Name $roleName) -in @("Critical", "High")) { 1 } else { 2 }
 
-    Function Get-AzureRBACAssignments {
-        [CmdletBinding()]
-        param (
-            [string]$ObjectId,
-            [string]$SubscriptionId
+        $null = $findings.Add(
+          (New-Finding `
+            -Layer             "SPAppPermission" `
+            -AttackPath        "Identity(SP) → AppPermission → $resourceName → $roleName" `
+            -ResourceType      "Application" `
+            -ResourceName      $resourceName `
+            -ResourceId        $a.resourceId `
+            -Permission        $roleName `
+            -AssignmentType    "ApplicationPermission" `
+            -Evidence          "servicePrincipalId=$ObjectId resourceId=$($a.resourceId) roleId=$($a.roleId)" `
+            -Remediation       "Validate '$roleName' on '$resourceName' is consumed. Remove unused app permissions. Prefer delegated scopes over application permissions where possible." `
+            -RemediationPriority $remediationPriority `
+            -RemediationOwner  "Application Security Team"
+                )
         )
-
-        $findings = New-Object System.Collections.ArrayList
-
-        if (-not $SubscriptionId) {
-            Write-Warning "No SubscriptionId supplied and AZURE_SUBSCRIPTION_ID env var not set — skipping Azure RBAC collection."
-            return $findings
-        }
-
-        $armToken = $null
-
-        # Try to swap Graph token for ARM token (only if client-credential mode)
-        if ($global:ClientId -and $global:ClientSecretSecure) {
-            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($global:ClientSecretSecure)
-            Try {
-                $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-                $body = @{
-                    client_id     = $global:ClientId
-                    client_secret = $plain
-                    scope         = "https://management.azure.com/.default"
-                    grant_type    = "client_credentials"
-                }
-                $tokenResp = Invoke-RestMethod -Uri "https://login.microsoftonline.com/$global:TenantId/oauth2/v2.0/token" -Method POST -Body $body -ErrorAction Stop
-                $armToken = $tokenResp.access_token
-            }
-            Finally {
-                if ($bstr -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-                $plain = $null
-                $body = $null
-            }
-        }
-
-        if (-not $armToken) {
-            Write-Warning "Could not obtain an ARM token for Azure RBAC lookup — skipping. In BYOT mode supply an ARM-scoped token or use client-credential mode."
-            return $findings
-        }
-
-        Try {
-            $armHeaders = @{ "Authorization" = "Bearer $armToken" }
-            $uri = "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&`$filter=principalId eq '$ObjectId'"
-            $rbacResp = Invoke-RestMethod -Uri $uri -Headers $armHeaders -Method GET -ErrorAction Stop
-
-            foreach ($ra in $rbacResp.value) {
-                # Resolve role definition name
-                $roleName = $ra.properties.roleDefinitionId
-                Try {
-                    $roleDefUri = "https://management.azure.com$($ra.properties.roleDefinitionId)?api-version=2022-04-01"
-                    $roleDefResp = Invoke-RestMethod -Uri $roleDefUri -Headers $armHeaders -Method GET -ErrorAction Stop
-                    $roleName = $roleDefResp.properties.roleName
-                }
-                Catch { }
-
-                $scope = $ra.properties.scope
-
-                $remediationPriority = if ((Get-RiskTier -Name $roleName) -in @("Critical", "High")) { 1 } else { 2 }
-
-                $null = $findings.Add(
-                    (New-Finding `
-                        -Layer             "AzureRBAC" `
-                        -AttackPath        "Identity → AzureRBAC → $roleName → $scope" `
-                        -ResourceType      "AzureSubscription" `
-                        -ResourceName      "Subscription: $SubscriptionId" `
-                        -ResourceId        $ra.id `
-                        -Permission        $roleName `
-                        -AssignmentType    "AzureRBAC" `
-                        -Evidence          "principalId=$ObjectId roleAssignmentId=$($ra.id) scope=$scope" `
-                        -Remediation       "Review Azure RBAC '$roleName' at scope '$scope'. Downscope to minimum required. Use PIM for Just-In-Time Azure role activation." `
-                        -RemediationPriority $remediationPriority `
-                        -RemediationOwner  "Cloud Platform Security Team"
-                )
-                )
-            }
-        }
-        Catch {
-            Write-Warning "Azure RBAC lookup failed: $($_.Exception.Message)"
-        }
-
-        return $findings
+      }
+    }
+    Catch {
+      Write-Warning "Could not retrieve SP app permissions: $($_.Exception.Message)"
     }
 
-    Function Get-ServicePrincipalAppPermissions {
-        [CmdletBinding()]
-        param ([string]$ObjectId)
+    return $findings
+  }
 
-        # For Service Principals: get the application permissions (app roles assigned TO this SP)
-        $findings = New-Object System.Collections.ArrayList
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Blast Radius Score Calculator
+  #─────────────────────────────────────────────────────────────────────────────
 
-        Try {
-            $assignments = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$ObjectId/appRoleAssignments"
-            foreach ($a in $assignments) {
-                $roleName = $a.roleId
-                $resourceName = $a.resourceId
+  Function Measure-BlastRadius {
+    param ([System.Collections.ArrayList]$Findings)
 
-                Try {
-                    $resourceSp = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals/$($a.resourceId)?`$select=displayName,appRoles"
-                    $roleObj = $resourceSp.appRoles | Where-Object { $_.id -eq $a.roleId }
-                    $roleName = if ($roleObj) { $roleObj.value } else { $a.roleId }
-                    $resourceName = $resourceSp.displayName
-                }
-                Catch { }
+    if (-not $Findings -or $Findings.Count -eq 0) { return 0 }
 
-                $remediationPriority = if ((Get-RiskTier -Name $roleName) -in @("Critical", "High")) { 1 } else { 2 }
-
-                $null = $findings.Add(
-                    (New-Finding `
-                        -Layer             "SPAppPermission" `
-                        -AttackPath        "Identity(SP) → AppPermission → $resourceName → $roleName" `
-                        -ResourceType      "Application" `
-                        -ResourceName      $resourceName `
-                        -ResourceId        $a.resourceId `
-                        -Permission        $roleName `
-                        -AssignmentType    "ApplicationPermission" `
-                        -Evidence          "servicePrincipalId=$ObjectId resourceId=$($a.resourceId) roleId=$($a.roleId)" `
-                        -Remediation       "Validate '$roleName' on '$resourceName' is consumed. Remove unused app permissions. Prefer delegated scopes over application permissions where possible." `
-                        -RemediationPriority $remediationPriority `
-                        -RemediationOwner  "Application Security Team"
-                )
-                )
-            }
-        }
-        Catch {
-            Write-Warning "Could not retrieve SP app permissions: $($_.Exception.Message)"
-        }
-
-        return $findings
+    $rawScore = 0
+    foreach ($f in $Findings) {
+      $rawScore += [int]$f.RiskWeight
     }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Blast Radius Score Calculator
-    #─────────────────────────────────────────────────────────────────────────────
+    # Cap at 100
+    return [Math]::Min(100, $rawScore)
+  }
 
-    Function Measure-BlastRadius {
-        param ([System.Collections.ArrayList]$Findings)
+  Function Get-BlastRadiusBand {
+    param ([int]$Score)
 
-        if (-not $Findings -or $Findings.Count -eq 0) { return 0 }
-
-        $rawScore = 0
-        foreach ($f in $Findings) {
-            $rawScore += [int]$f.RiskWeight
-        }
-
-        # Cap at 100
-        return [Math]::Min(100, $rawScore)
+    switch ($Score) {
+      { $_ -le 20 } { return @{ Label = "Minimal"; Color = "#3fb950"; CssClass = "band-green" } }
+      { $_ -le 40 } { return @{ Label = "Low"; Color = "#388bfd"; CssClass = "band-blue" } }
+      { $_ -le 60 } { return @{ Label = "Medium"; Color = "#d29922"; CssClass = "band-amber" } }
+      { $_ -le 80 } { return @{ Label = "High"; Color = "#f08030"; CssClass = "band-orange" } }
+      default { return @{ Label = "Critical"; Color = "#f85149"; CssClass = "band-red" } }
     }
+  }
 
-    Function Get-BlastRadiusBand {
-        param ([int]$Score)
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: MFA Status Helper
+  #─────────────────────────────────────────────────────────────────────────────
 
-        switch ($Score) {
-            { $_ -le 20 } { return @{ Label = "Minimal"; Color = "#3fb950"; CssClass = "band-green" } }
-            { $_ -le 40 } { return @{ Label = "Low"; Color = "#388bfd"; CssClass = "band-blue" } }
-            { $_ -le 60 } { return @{ Label = "Medium"; Color = "#d29922"; CssClass = "band-amber" } }
-            { $_ -le 80 } { return @{ Label = "High"; Color = "#f08030"; CssClass = "band-orange" } }
-            default { return @{ Label = "Critical"; Color = "#f85149"; CssClass = "band-red" } }
-        }
+  Function Get-MFAStatus {
+    [CmdletBinding()]
+    param ([string]$UserId)
+
+    Try {
+      $methods = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$UserId/authentication/methods"
+      $strongMethods = $methods | Where-Object {
+        $_.'@odata.type' -match 'microsoftAuthenticator|fido2|windowsHelloForBusiness|softwareOath'
+      }
+      return @{
+        HasMFA        = ([bool]($strongMethods.Count -gt 0))
+        MethodCount   = $methods.Count
+        StrongMethods = ($strongMethods | ForEach-Object { $_.'@odata.type' -replace '#microsoft.graph.', '' }) -join ', '
+      }
     }
-
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: MFA Status Helper
-    #─────────────────────────────────────────────────────────────────────────────
-
-    Function Get-MFAStatus {
-        [CmdletBinding()]
-        param ([string]$UserId)
-
-        Try {
-            $methods = Invoke-GraphRequest -Uri "https://graph.microsoft.com/beta/users/$UserId/authentication/methods"
-            $strongMethods = $methods | Where-Object {
-                $_.'@odata.type' -match 'microsoftAuthenticator|fido2|windowsHelloForBusiness|softwareOath'
-            }
-            return @{
-                HasMFA        = ([bool]($strongMethods.Count -gt 0))
-                MethodCount   = $methods.Count
-                StrongMethods = ($strongMethods | ForEach-Object { $_.'@odata.type' -replace '#microsoft.graph.', '' }) -join ', '
-            }
-        }
-        Catch {
-            return @{ HasMFA = $false; MethodCount = 0; StrongMethods = "Unknown (permission error)" }
-        }
+    Catch {
+      return @{ HasMFA = $false; MethodCount = 0; StrongMethods = "Unknown (permission error)" }
     }
+  }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: HTML Dashboard Generator
-    #─────────────────────────────────────────────────────────────────────────────
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: HTML Dashboard Generator
+  #─────────────────────────────────────────────────────────────────────────────
 
-    Function ConvertTo-JsonSafe {
-        param ([string]$Value)
-        return [string]$Value `
-            -replace '\\', '\\\\' `
-            -replace '"', '\"'   `
-            -replace "`r", ''     `
-            -replace "`n", '\n'   `
-            -replace "`t", '\t'   `
-            -replace '<', '\u003c' `
-            -replace '>', '\u003e' `
-            -replace '&', '\u0026'
+  Function ConvertTo-JsonSafe {
+    param ([string]$Value)
+    return [string]$Value `
+      -replace '\\', '\\\\' `
+      -replace '"', '\"'   `
+      -replace "`r", ''     `
+      -replace "`n", '\n'   `
+      -replace "`t", '\t'   `
+      -replace '<', '\u003c' `
+      -replace '>', '\u003e' `
+      -replace '&', '\u0026'
+  }
+
+  Function Generate-BlastRadiusDashboard {
+    [CmdletBinding()]
+    param (
+      [PSCustomObject]$IdentityProfile,
+      [string]$IdentityType,
+      [System.Collections.ArrayList]$Findings,
+      [System.Collections.ArrayList]$GroupMemberships,
+      [int]$BlastRadiusScore,
+      [hashtable]$BlastRadiusBand,
+      [hashtable]$MFAStatus,
+      [string]$AssessmentTimestamp,
+      [string]$TenantId,
+      [string]$OutputFilePath
+    )
+
+    # ── Pre-compute summary metrics ───────────────────────────────────────────
+    $criticalCount = ($Findings | Where-Object { $_.RiskTier -eq "Critical" }).Count
+    $highCount = ($Findings | Where-Object { $_.RiskTier -eq "High" }).Count
+    $mediumCount = ($Findings | Where-Object { $_.RiskTier -eq "Medium" }).Count
+    $lowCount = ($Findings | Where-Object { $_.RiskTier -eq "Low" }).Count
+    $totalFindings = $Findings.Count
+    $groupCount = $GroupMemberships.Count
+
+    $displayName = ConvertTo-JsonSafe $IdentityProfile.displayName
+
+    $upnValue = if ($IdentityProfile.userPrincipalName) { $IdentityProfile.userPrincipalName } else { $IdentityProfile.appId }
+    $upn = ConvertTo-JsonSafe $upnValue
+
+    $departmentValue = if ($IdentityProfile.department) { $IdentityProfile.department } else { "N/A" }
+    $department = ConvertTo-JsonSafe $departmentValue
+
+    $jobTitleValue = if ($IdentityProfile.jobTitle) { $IdentityProfile.jobTitle } else { "N/A" }
+    $jobTitle = ConvertTo-JsonSafe $jobTitleValue
+
+    $accountEnabled = if ($IdentityProfile.accountEnabled -eq $true) { "Yes" } elseif ($IdentityProfile.accountEnabled -eq $false) { "No" } else { "N/A" }
+    $onPremSync = if ($IdentityProfile.onPremisesSyncEnabled) { "Yes" } else { "No" }
+    $mfaLabel = if ($MFAStatus.HasMFA) { "Registered" } else { "NOT Registered ⚠️" }
+    $mfaCss = if ($MFAStatus.HasMFA) { "c-green" } else { "c-red" }
+    $bandColor = $BlastRadiusBand.Color
+    $bandLabel = $BlastRadiusBand.Label
+
+    # ── Serialize Findings to JSON ────────────────────────────────────────────
+    $findingsJsonParts = New-Object System.Collections.ArrayList
+    foreach ($f in $Findings) {
+      $part = '{' +
+      '"layer":"' + (ConvertTo-JsonSafe $f.Layer) + '",' +
+      '"attackPath":"' + (ConvertTo-JsonSafe $f.AttackPath) + '",' +
+      '"resourceType":"' + (ConvertTo-JsonSafe $f.ResourceType) + '",' +
+      '"resourceName":"' + (ConvertTo-JsonSafe $f.ResourceName) + '",' +
+      '"resourceId":"' + (ConvertTo-JsonSafe $f.ResourceId) + '",' +
+      '"permission":"' + (ConvertTo-JsonSafe $f.Permission) + '",' +
+      '"assignmentType":"' + (ConvertTo-JsonSafe $f.AssignmentType) + '",' +
+      '"riskTier":"' + (ConvertTo-JsonSafe $f.RiskTier) + '",' +
+      '"riskWeight":' + [int]$f.RiskWeight + ',' +
+      '"evidence":"' + (ConvertTo-JsonSafe $f.Evidence) + '",' +
+      '"remediation":"' + (ConvertTo-JsonSafe $f.Remediation) + '",' +
+      '"remediationPriority":' + [int]$f.RemediationPriority + ',' +
+      '"remediationOwner":"' + (ConvertTo-JsonSafe $f.RemediationOwner) + '"' +
+      '}'
+      $null = $findingsJsonParts.Add($part)
     }
+    $findingsJson = '[' + ($findingsJsonParts -join ',') + ']'
 
-    Function Generate-BlastRadiusDashboard {
-        [CmdletBinding()]
-        param (
-            [PSCustomObject]$IdentityProfile,
-            [string]$IdentityType,
-            [System.Collections.ArrayList]$Findings,
-            [System.Collections.ArrayList]$GroupMemberships,
-            [int]$BlastRadiusScore,
-            [hashtable]$BlastRadiusBand,
-            [hashtable]$MFAStatus,
-            [string]$AssessmentTimestamp,
-            [string]$TenantId,
-            [string]$OutputFilePath
-        )
+    # ── Groups JSON ───────────────────────────────────────────────────────────
+    $groupJsonParts = New-Object System.Collections.ArrayList
+    foreach ($g in $GroupMemberships) {
+      $gType = if ($g.isAssignableToRole) { "Role-Assignable" } elseif ($g.securityEnabled) { "Security" } else { "M365" }
+      $part = '{"name":"' + (ConvertTo-JsonSafe $g.displayName) + '","type":"' + $gType + '","id":"' + (ConvertTo-JsonSafe $g.id) + '"}'
+      $null = $groupJsonParts.Add($part)
+    }
+    $groupsJson = '[' + ($groupJsonParts -join ',') + ']'
 
-        # ── Pre-compute summary metrics ───────────────────────────────────────────
-        $criticalCount = ($Findings | Where-Object { $_.RiskTier -eq "Critical" }).Count
-        $highCount = ($Findings | Where-Object { $_.RiskTier -eq "High" }).Count
-        $mediumCount = ($Findings | Where-Object { $_.RiskTier -eq "Medium" }).Count
-        $lowCount = ($Findings | Where-Object { $_.RiskTier -eq "Low" }).Count
-        $totalFindings = $Findings.Count
-        $groupCount = $GroupMemberships.Count
+    # ── SVG Donut math ────────────────────────────────────────────────────────
+    $circumference = [Math]::Round(2 * [Math]::PI * 54, 2)   # r=54
+    $scoreStroke = [Math]::Round(($BlastRadiusScore / 100) * $circumference, 2)
+    $gapStroke = [Math]::Round($circumference - $scoreStroke, 2)
 
-        $displayName = ConvertTo-JsonSafe $IdentityProfile.displayName
-
-        $upnValue = if ($IdentityProfile.userPrincipalName) { $IdentityProfile.userPrincipalName } else { $IdentityProfile.appId }
-        $upn = ConvertTo-JsonSafe $upnValue
-
-        $departmentValue = if ($IdentityProfile.department) { $IdentityProfile.department } else { "N/A" }
-        $department = ConvertTo-JsonSafe $departmentValue
-
-        $jobTitleValue = if ($IdentityProfile.jobTitle) { $IdentityProfile.jobTitle } else { "N/A" }
-        $jobTitle = ConvertTo-JsonSafe $jobTitleValue
-
-        $accountEnabled = if ($IdentityProfile.accountEnabled -eq $true) { "Yes" } elseif ($IdentityProfile.accountEnabled -eq $false) { "No" } else { "N/A" }
-        $onPremSync = if ($IdentityProfile.onPremisesSyncEnabled) { "Yes" } else { "No" }
-        $mfaLabel = if ($MFAStatus.HasMFA) { "Registered" } else { "NOT Registered ⚠️" }
-        $mfaCss = if ($MFAStatus.HasMFA) { "c-green" } else { "c-red" }
-        $bandColor = $BlastRadiusBand.Color
-        $bandLabel = $BlastRadiusBand.Label
-
-        # ── Serialize Findings to JSON ────────────────────────────────────────────
-        $findingsJsonParts = New-Object System.Collections.ArrayList
-        foreach ($f in $Findings) {
-            $part = '{' +
-            '"layer":"' + (ConvertTo-JsonSafe $f.Layer) + '",' +
-            '"attackPath":"' + (ConvertTo-JsonSafe $f.AttackPath) + '",' +
-            '"resourceType":"' + (ConvertTo-JsonSafe $f.ResourceType) + '",' +
-            '"resourceName":"' + (ConvertTo-JsonSafe $f.ResourceName) + '",' +
-            '"resourceId":"' + (ConvertTo-JsonSafe $f.ResourceId) + '",' +
-            '"permission":"' + (ConvertTo-JsonSafe $f.Permission) + '",' +
-            '"assignmentType":"' + (ConvertTo-JsonSafe $f.AssignmentType) + '",' +
-            '"riskTier":"' + (ConvertTo-JsonSafe $f.RiskTier) + '",' +
-            '"riskWeight":' + [int]$f.RiskWeight + ',' +
-            '"evidence":"' + (ConvertTo-JsonSafe $f.Evidence) + '",' +
-            '"remediation":"' + (ConvertTo-JsonSafe $f.Remediation) + '",' +
-            '"remediationPriority":' + [int]$f.RemediationPriority + ',' +
-            '"remediationOwner":"' + (ConvertTo-JsonSafe $f.RemediationOwner) + '"' +
-            '}'
-            $null = $findingsJsonParts.Add($part)
-        }
-        $findingsJson = '[' + ($findingsJsonParts -join ',') + ']'
-
-        # ── Groups JSON ───────────────────────────────────────────────────────────
-        $groupJsonParts = New-Object System.Collections.ArrayList
-        foreach ($g in $GroupMemberships) {
-            $gType = if ($g.isAssignableToRole) { "Role-Assignable" } elseif ($g.securityEnabled) { "Security" } else { "M365" }
-            $part = '{"name":"' + (ConvertTo-JsonSafe $g.displayName) + '","type":"' + $gType + '","id":"' + (ConvertTo-JsonSafe $g.id) + '"}'
-            $null = $groupJsonParts.Add($part)
-        }
-        $groupsJson = '[' + ($groupJsonParts -join ',') + ']'
-
-        # ── SVG Donut math ────────────────────────────────────────────────────────
-        $circumference = [Math]::Round(2 * [Math]::PI * 54, 2)   # r=54
-        $scoreStroke = [Math]::Round(($BlastRadiusScore / 100) * $circumference, 2)
-        $gapStroke = [Math]::Round($circumference - $scoreStroke, 2)
-
-        # ── HTML here-string ──────────────────────────────────────────────────────
-        $html = @'
+    # ── HTML here-string ──────────────────────────────────────────────────────
+    $html = @'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2116,364 +2172,406 @@ function exportJSON(){
 </html>
 '@
 
-        # ── Token substitution (no string interpolation inside the here-string) ──
-        $tenantShort = if ($TenantId.Length -ge 8) { $TenantId.Substring(0, 8) + "..." } else { $TenantId }
-        $identityIcon = switch ($IdentityType) {
-            "User" { "👤" }
-            "ServicePrincipal" { "⚙️" }
-            "Group" { "👥" }
-            "Application" { "🔑" }
-            default { "🆔" }
-        }
-        $acctChip = if ($accountEnabled -eq "Yes") { "c-green" } else { "c-red" }
-        $mfaChipCss = if ($MFAStatus.HasMFA) { "c-green" } else { "c-red" }
-        $mfaMethods = ConvertTo-JsonSafe($MFAStatus.StrongMethods)
+    # ── Token substitution (no string interpolation inside the here-string) ──
+    $tenantShort = if ($TenantId.Length -ge 8) { $TenantId.Substring(0, 8) + "..." } else { $TenantId }
+    $identityIcon = switch ($IdentityType) {
+      "User" { "👤" }
+      "ServicePrincipal" { "⚙️" }
+      "Group" { "👥" }
+      "Application" { "🔑" }
+      default { "🆔" }
+    }
+    $acctChip = if ($accountEnabled -eq "Yes") { "c-green" } else { "c-red" }
+    $mfaChipCss = if ($MFAStatus.HasMFA) { "c-green" } else { "c-red" }
+    $mfaMethods = ConvertTo-JsonSafe($MFAStatus.StrongMethods)
 
-        $html = $html `
-            -replace '__DISPLAY_NAME__', $displayName `
-            -replace '__UPN__', $upn `
-            -replace '__IDENTITY_TYPE__', $IdentityType `
-            -replace '__IDENTITY_ICON__', $identityIcon `
-            -replace '__DEPARTMENT__', $department `
-            -replace '__JOB_TITLE__', $jobTitle `
-            -replace '__ACCOUNT_ENABLED__', $accountEnabled `
-            -replace '__ACCT_CHIP__', $acctChip `
-            -replace '__ON_PREM_SYNC__', $onPremSync `
-            -replace '__MFA_LABEL__', $mfaLabel `
-            -replace '__MFA_CHIP__', $mfaCss `
-            -replace '__MFA_METHODS__', $mfaMethods `
-            -replace '__BLAST_SCORE__', $BlastRadiusScore `
-            -replace '__BAND_COLOR__', $bandColor `
-            -replace '__BAND_LABEL__', $bandLabel `
-            -replace '__SCORE_STROKE__', $scoreStroke `
-            -replace '__GAP_STROKE__', $gapStroke `
-            -replace '__CRITICAL_COUNT__', $criticalCount `
-            -replace '__HIGH_COUNT__', $highCount `
-            -replace '__MEDIUM_COUNT__', $mediumCount `
-            -replace '__LOW_COUNT__', ($lowCount + ($Findings | Where-Object { $_.RiskTier -eq "Informational" }).Count) `
-            -replace '__TOTAL_FINDINGS__', $totalFindings `
-            -replace '__GROUP_COUNT__', $groupCount `
-            -replace '__TIMESTAMP__', $AssessmentTimestamp `
-            -replace '__TENANT_ID_SHORT__', $tenantShort `
-            -replace '__FINDINGS_JSON__', $findingsJson `
-            -replace '__GROUPS_JSON__', $groupsJson
+    $html = $html `
+      -replace '__DISPLAY_NAME__', $displayName `
+      -replace '__UPN__', $upn `
+      -replace '__IDENTITY_TYPE__', $IdentityType `
+      -replace '__IDENTITY_ICON__', $identityIcon `
+      -replace '__DEPARTMENT__', $department `
+      -replace '__JOB_TITLE__', $jobTitle `
+      -replace '__ACCOUNT_ENABLED__', $accountEnabled `
+      -replace '__ACCT_CHIP__', $acctChip `
+      -replace '__ON_PREM_SYNC__', $onPremSync `
+      -replace '__MFA_LABEL__', $mfaLabel `
+      -replace '__MFA_CHIP__', $mfaCss `
+      -replace '__MFA_METHODS__', $mfaMethods `
+      -replace '__BLAST_SCORE__', $BlastRadiusScore `
+      -replace '__BAND_COLOR__', $bandColor `
+      -replace '__BAND_LABEL__', $bandLabel `
+      -replace '__SCORE_STROKE__', $scoreStroke `
+      -replace '__GAP_STROKE__', $gapStroke `
+      -replace '__CRITICAL_COUNT__', $criticalCount `
+      -replace '__HIGH_COUNT__', $highCount `
+      -replace '__MEDIUM_COUNT__', $mediumCount `
+      -replace '__LOW_COUNT__', ($lowCount + ($Findings | Where-Object { $_.RiskTier -eq "Informational" }).Count) `
+      -replace '__TOTAL_FINDINGS__', $totalFindings `
+      -replace '__GROUP_COUNT__', $groupCount `
+      -replace '__TIMESTAMP__', $AssessmentTimestamp `
+      -replace '__TENANT_ID_SHORT__', $tenantShort `
+      -replace '__FINDINGS_JSON__', $findingsJson `
+      -replace '__GROUPS_JSON__', $groupsJson
 
-        $html | Out-File -FilePath $OutputFilePath -Encoding UTF8 -Force
+    $html | Out-File -FilePath $OutputFilePath -Encoding UTF8 -Force
+  }
+
+  #─────────────────────────────────────────────────────────────────────────────
+  #  REGION: Script Execution
+  #─────────────────────────────────────────────────────────────────────────────
+
+  Clear-Host
+
+  # Stale variable cleanup (matches reference script pattern)
+  Remove-Variable -Name partialData, usersData, skip -ErrorAction SilentlyContinue
+
+  # Ensure output directory exists
+  If (-not (Test-Path $OutputPath)) {
+    New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+  }
+
+  $scriptStartTime = Get-Date
+  $assessmentTimestamp = $scriptStartTime.ToString("dd-MMM-yyyy HH:mm:ss")
+  $fileTimestamp = $scriptStartTime.ToString("yyyyMMdd-HHmmss")
+
+  # ── Banner ────────────────────────────────────────────────────────────────────
+  Write-Host ""
+  Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+  Write-Host "  ║       Entra ID — Identity Blast Radius Assessment            ║" -ForegroundColor Cyan
+  Write-Host "  ║                    Version 1.0  |  2026                      ║" -ForegroundColor Cyan
+  Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+  Write-Host ""
+  Write-Host "  🕐 Started    : $($scriptStartTime.ToString('dd-MMM-yyyy  hh:mm:ss tt'))" -ForegroundColor Gray
+  Write-Host "  📁 Output Dir : $OutputPath" -ForegroundColor Gray
+  Write-Host ""
+
+  # ── Step 1 : Authentication ───────────────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 1 of 9  ›  Authenticating                            │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
+
+  if ($PSCmdlet.ParameterSetName -eq "BYOT") {
+    # BYOT — store token directly, set expiry far in future so ShouldRenewToken stays false
+    Write-Host "  ⚡ BYOT mode — using supplied access token" -ForegroundColor Yellow
+    $global:accessToken = $AccessToken
+    $global:tokenExpirationTime = (Get-Date).AddHours(1)
+    $global:RefreshIntervalInMinutes = 5
+    $global:TenantId = $TenantId
+    Write-Host "  ✅ Token accepted" -ForegroundColor Green
+  }
+  else {
+    Write-Host "  ⏳ Requesting access token (client credentials)..." -ForegroundColor Yellow
+    $token = Connect-EntraID -ClientId $ClientId -ClientSecret $ClientSecret -TenantId $TenantId -RefreshInterval 15
+
+    if (-not $token) {
+      Write-Error "Authentication failed. Verify ClientId, ClientSecret, and TenantId."
+      return
+    }
+    $global:accessToken = $token
+    $global:TenantId = $TenantId
+    Write-Host "  ✅ Authentication successful" -ForegroundColor Green
+  }
+
+  Write-Host ""
+
+  # ── Step 1.1 : Validate Required Graph Permissions ───────────────────────────
+  Write-Host "  🔍 Validating required Microsoft Graph permissions..." -ForegroundColor Yellow
+
+  $requiredGraphPermissions = @(
+    "Directory.Read.All"
+    "Policy.Read.All"
+    "Application.Read.All"
+    "AuditLog.Read.All"
+    "RoleManagement.Read.Directory"
+    "IdentityRiskyUser.Read.All"
+    "UserAuthenticationMethod.Read.All"
+    "Reports.Read.All"
+    "AccessReview.Read.All"
+  )
+
+  $permissionCheck = Test-GraphTokenPermissions `
+    -AccessToken $global:accessToken `
+    -RequiredPermissions $requiredGraphPermissions
+
+  if (-not $permissionCheck.Valid) {
+    Write-Host ""
+    Write-Host "  ⚠️  Warning: Some required Microsoft Graph permissions are missing." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Missing permissions:" -ForegroundColor Yellow
+
+    foreach ($permission in $permissionCheck.MissingPermissions) {
+      Write-Host "    • $permission" -ForegroundColor Yellow
     }
 
-    #─────────────────────────────────────────────────────────────────────────────
-    #  REGION: Script Execution
-    #─────────────────────────────────────────────────────────────────────────────
+    Write-Host ""
+    Write-Host "  The assessment will continue with the available permissions." -ForegroundColor Yellow
+    Write-Host "  Some assessment values or findings may not be available." -ForegroundColor Yellow
+    Write-Host ""
+  }
+  else {
+    Write-Host "  ✅ All required Microsoft Graph permissions validated." -ForegroundColor Green
+  }
 
-    Clear-Host
+  Write-Host ""
 
-    # Stale variable cleanup (matches reference script pattern)
-    Remove-Variable -Name partialData, usersData, skip -ErrorAction SilentlyContinue
+  # ── Step 2 : Resolve Target Identity ─────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 2 of 9  ›  Resolving Target Identity                 │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
 
-    # Ensure output directory exists
-    If (-not (Test-Path $OutputPath)) {
-        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+  if ($TargetUserPrincipalName) {
+    Write-Host "  ⏳ Resolving UPN: $TargetUserPrincipalName" -ForegroundColor Yellow
+    $TargetIdentityId = Resolve-UPNToObjectId -UserPrincipalName $TargetUserPrincipalName
+    if (-not $TargetIdentityId) {
+      Write-Error "Could not resolve UPN '$TargetUserPrincipalName' to an object ID. Verify the UPN exists in the tenant."
+      return
     }
+    Write-Host "  ✅ Resolved to ObjectId: $TargetIdentityId" -ForegroundColor Green
+  }
+  else {
+    Write-Host "  ✅ Using ObjectId: $TargetIdentityId" -ForegroundColor Green
+  }
 
-    $scriptStartTime = Get-Date
-    $assessmentTimestamp = $scriptStartTime.ToString("dd-MMM-yyyy HH:mm:ss")
-    $fileTimestamp = $scriptStartTime.ToString("yyyyMMdd-HHmmss")
+  Write-Host ""
 
-    # ── Banner ────────────────────────────────────────────────────────────────────
-    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║       Entra ID — Identity Blast Radius Assessment            ║" -ForegroundColor Cyan
-    Write-Host "  ║                    Version 1.0  |  2026                      ║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  🕐 Started    : $($scriptStartTime.ToString('dd-MMM-yyyy  hh:mm:ss tt'))" -ForegroundColor Gray
-    Write-Host "  📁 Output Dir : $OutputPath" -ForegroundColor Gray
-    Write-Host ""
+  # ── Step 3 : Identity Profile ─────────────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 3 of 9  ›  Collecting Evidence — Identity Profile    │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
+  Write-Host "  ⏳ Fetching identity profile..." -ForegroundColor Yellow
 
-    # ── Step 1 : Authentication ───────────────────────────────────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 1 of 9  ›  Authenticating                            │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
+  $identityResult = Get-IdentityProfile -ObjectId $TargetIdentityId
+  $identityProfile = $identityResult.Profile
+  $identityType = $identityResult.IdentityType
 
-    if ($PSCmdlet.ParameterSetName -eq "BYOT") {
-        # BYOT — store token directly, set expiry far in future so ShouldRenewToken stays false
-        Write-Host "  ⚡ BYOT mode — using supplied access token" -ForegroundColor Yellow
-        $global:accessToken = $AccessToken
-        $global:tokenExpirationTime = (Get-Date).AddHours(1)
-        $global:RefreshIntervalInMinutes = 5
-        $global:TenantId = $TenantId
-        Write-Host "  ✅ Token accepted" -ForegroundColor Green
+  if (-not $identityProfile -or -not $identityProfile.id) {
+    Write-Error "Could not retrieve identity profile for ObjectId '$TargetIdentityId'. Check that the ID is valid and the token has Directory.Read.All."
+    return
+  }
+
+  Write-Host "  ✅ Identity resolved: $($identityProfile.displayName) [$identityType]" -ForegroundColor Green
+  Write-Host ""
+
+  # All findings accumulate here
+  $allFindings = New-Object System.Collections.ArrayList
+
+  # ── Step 4 : Group Memberships ────────────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 4 of 9  ›  Group Memberships (Transitive)            │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
+  Write-Host "  ⏳ Resolving transitive group memberships..." -ForegroundColor Yellow
+
+  $groupMemberships = Get-GroupMemberships -ObjectId $TargetIdentityId -IdentityType $identityType
+
+  foreach ($g in $groupMemberships) {
+    $isRoleAssignable = [bool]$g.isAssignableToRole
+
+    $permission = if ($isRoleAssignable) { "RoleAssignableGroup" } else { "GroupMember" }
+
+    $remediation = if ($isRoleAssignable) {
+      "CRITICAL: This group is role-assignable. Review all roles assigned to '$($g.displayName)' immediately. Remove identity from group if membership is not required."
     }
     else {
-        Write-Host "  ⏳ Requesting access token (client credentials)..." -ForegroundColor Yellow
-        $token = Connect-EntraID -ClientId $ClientId -ClientSecret $ClientSecret -TenantId $TenantId -RefreshInterval 15
-
-        if (-not $token) {
-            Write-Error "Authentication failed. Verify ClientId, ClientSecret, and TenantId."
-            return
-        }
-        Write-Host "  ✅ Authentication successful" -ForegroundColor Green
+      "Review membership in '$($g.displayName)'. Remove if no longer required (least-privilege principle)."
     }
 
-    Write-Host ""
+    $remediationPriority = if ($isRoleAssignable) { 1 } else { 3 }
 
-    # ── Step 2 : Resolve Target Identity ─────────────────────────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 2 of 9  ›  Resolving Target Identity                 │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
-
-    if ($TargetUserPrincipalName) {
-        Write-Host "  ⏳ Resolving UPN: $TargetUserPrincipalName" -ForegroundColor Yellow
-        $TargetIdentityId = Resolve-UPNToObjectId -UserPrincipalName $TargetUserPrincipalName
-        if (-not $TargetIdentityId) {
-            Write-Error "Could not resolve UPN '$TargetUserPrincipalName' to an object ID. Verify the UPN exists in the tenant."
-            return
-        }
-        Write-Host "  ✅ Resolved to ObjectId: $TargetIdentityId" -ForegroundColor Green
-    }
-    else {
-        Write-Host "  ✅ Using ObjectId: $TargetIdentityId" -ForegroundColor Green
-    }
-
-    Write-Host ""
-
-    # ── Step 3 : Identity Profile ─────────────────────────────────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 3 of 9  ›  Collecting Evidence — Identity Profile    │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
-    Write-Host "  ⏳ Fetching identity profile..." -ForegroundColor Yellow
-
-    $identityResult = Get-IdentityProfile -ObjectId $TargetIdentityId
-    $identityProfile = $identityResult.Profile
-    $identityType = $identityResult.IdentityType
-
-    if (-not $identityProfile -or -not $identityProfile.id) {
-        Write-Error "Could not retrieve identity profile for ObjectId '$TargetIdentityId'. Check that the ID is valid and the token has Directory.Read.All."
-        return
-    }
-
-    Write-Host "  ✅ Identity resolved: $($identityProfile.displayName) [$identityType]" -ForegroundColor Green
-    Write-Host ""
-
-    # All findings accumulate here
-    $allFindings = New-Object System.Collections.ArrayList
-
-    # ── Step 4 : Group Memberships ────────────────────────────────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 4 of 9  ›  Group Memberships (Transitive)            │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
-    Write-Host "  ⏳ Resolving transitive group memberships..." -ForegroundColor Yellow
-
-    $groupMemberships = Get-GroupMemberships -ObjectId $TargetIdentityId -IdentityType $identityType
-
-    foreach ($g in $groupMemberships) {
-        $isRoleAssignable = [bool]$g.isAssignableToRole
-
-        $permission = if ($isRoleAssignable) { "RoleAssignableGroup" } else { "GroupMember" }
-
-        $remediation = if ($isRoleAssignable) {
-            "CRITICAL: This group is role-assignable. Review all roles assigned to '$($g.displayName)' immediately. Remove identity from group if membership is not required."
-        }
-        else {
-            "Review membership in '$($g.displayName)'. Remove if no longer required (least-privilege principle)."
-        }
-
-        $remediationPriority = if ($isRoleAssignable) { 1 } else { 3 }
-
-        $null = $allFindings.Add(
-            (New-Finding `
-                -Layer                "GroupMembership" `
-                -AttackPath           "Identity → Group → $($g.displayName)" `
-                -ResourceType         "Group" `
-                -ResourceName         $g.displayName `
-                -ResourceId           $g.id `
-                -Permission           $permission `
-                -AssignmentType       "Member" `
-                -Evidence             "principalId=$TargetIdentityId memberOfGroupId=$($g.id) isRoleAssignable=$isRoleAssignable" `
-                -Remediation          $remediation `
-                -RemediationPriority  $remediationPriority `
-                -RemediationOwner     "Identity & Access Management Team"
+    $null = $allFindings.Add(
+      (New-Finding `
+        -Layer                "GroupMembership" `
+        -AttackPath           "Identity → Group → $($g.displayName)" `
+        -ResourceType         "Group" `
+        -ResourceName         $g.displayName `
+        -ResourceId           $g.id `
+        -Permission           $permission `
+        -AssignmentType       "Member" `
+        -Evidence             "principalId=$TargetIdentityId memberOfGroupId=$($g.id) isRoleAssignable=$isRoleAssignable" `
+        -Remediation          $remediation `
+        -RemediationPriority  $remediationPriority `
+        -RemediationOwner     "Identity & Access Management Team"
             )
-        )
-    }
+    )
+  }
 
-    Write-Host "  ✅ $($groupMemberships.Count) group memberships found" -ForegroundColor Green
-    Write-Host ""
+  Write-Host "  ✅ $($groupMemberships.Count) group memberships found" -ForegroundColor Green
+  Write-Host ""
 
-    # ── Step 5 : Directory Roles ──────────────────────────────────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 5 of 9  ›  Directory Role Assignments                │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
-    Write-Host "  ⏳ Querying directory role assignments..." -ForegroundColor Yellow
-    if ($IncludeEligibleRoles) { Write-Host "  ℹ️  PIM-eligible roles included" -ForegroundColor Cyan }
+  # ── Step 5 : Directory Roles ──────────────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 5 of 9  ›  Directory Role Assignments                │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
+  Write-Host "  ⏳ Querying directory role assignments..." -ForegroundColor Yellow
+  if ($IncludeEligibleRoles) { Write-Host "  ℹ️  PIM-eligible roles included" -ForegroundColor Cyan }
 
-    $roleFindings = Get-DirectoryRoleAssignments -ObjectId $TargetIdentityId -IncludeEligible:$IncludeEligibleRoles
-    $roleFindings | ForEach-Object { $null = $allFindings.Add($_) }
+  $roleFindings = Get-DirectoryRoleAssignments -ObjectId $TargetIdentityId -IncludeEligible:$IncludeEligibleRoles
+  $roleFindings | ForEach-Object { $null = $allFindings.Add($_) }
 
-    Write-Host "  ✅ $($roleFindings.Count) role finding(s) collected" -ForegroundColor Green
-    Write-Host ""
+  Write-Host "  ✅ $($roleFindings.Count) role finding(s) collected" -ForegroundColor Green
+  Write-Host ""
 
-    # ── Step 6 : App Role Assignments & Delegated Permissions ────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 6 of 9  ›  App Permissions & Delegated Scopes        │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
-    Write-Host "  ⏳ Collecting application role assignments..." -ForegroundColor Yellow
-    $appFindings = Get-AppRoleAssignments -ObjectId $TargetIdentityId -IdentityType $identityType
-    $appFindings | ForEach-Object { $null = $allFindings.Add($_) }
+  # ── Step 6 : App Role Assignments & Delegated Permissions ────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 6 of 9  ›  App Permissions & Delegated Scopes        │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
+  Write-Host "  ⏳ Collecting application role assignments..." -ForegroundColor Yellow
+  $appFindings = Get-AppRoleAssignments -ObjectId $TargetIdentityId -IdentityType $identityType
+  $appFindings | ForEach-Object { $null = $allFindings.Add($_) }
 
-    Write-Host "  ⏳ Collecting delegated OAuth2 permissions..." -ForegroundColor Yellow
-    $delegatedFindings = Get-DelegatedPermissions -ObjectId $TargetIdentityId -IdentityType $identityType
-    $delegatedFindings | ForEach-Object { $null = $allFindings.Add($_) }
+  Write-Host "  ⏳ Collecting delegated OAuth2 permissions..." -ForegroundColor Yellow
+  $delegatedFindings = Get-DelegatedPermissions -ObjectId $TargetIdentityId -IdentityType $identityType
+  $delegatedFindings | ForEach-Object { $null = $allFindings.Add($_) }
 
-    if ($identityType -eq "ServicePrincipal") {
-        Write-Host "  ⏳ Collecting service principal app permissions..." -ForegroundColor Yellow
-        $spFindings = Get-ServicePrincipalAppPermissions -ObjectId $TargetIdentityId
-        $spFindings | ForEach-Object { $null = $allFindings.Add($_) }
-    }
+  if ($identityType -eq "ServicePrincipal") {
+    Write-Host "  ⏳ Collecting service principal app permissions..." -ForegroundColor Yellow
+    $spFindings = Get-ServicePrincipalAppPermissions -ObjectId $TargetIdentityId
+    $spFindings | ForEach-Object { $null = $allFindings.Add($_) }
+  }
 
-    Write-Host "  ✅ $($appFindings.Count + $delegatedFindings.Count) app/delegated finding(s)" -ForegroundColor Green
-    Write-Host ""
+  Write-Host "  ✅ $($appFindings.Count + $delegatedFindings.Count) app/delegated finding(s)" -ForegroundColor Green
+  Write-Host ""
 
-    # ── Step 7 : Owned Objects & Devices ─────────────────────────────────────────
-    Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 7 of 9  ›  Owned Objects & Devices                   │" -ForegroundColor DarkCyan
-    Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-    Write-Host ""
-    Write-Host "  ⏳ Collecting owned objects..." -ForegroundColor Yellow
-    $ownedFindings = Get-OwnedObjects -ObjectId $TargetIdentityId -IdentityType $identityType
-    $ownedFindings | ForEach-Object { $null = $allFindings.Add($_) }
+  # ── Step 7 : Owned Objects & Devices ─────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 7 of 9  ›  Owned Objects & Devices                   │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
+  Write-Host "  ⏳ Collecting owned objects..." -ForegroundColor Yellow
+  $ownedFindings = Get-OwnedObjects -ObjectId $TargetIdentityId -IdentityType $identityType
+  $ownedFindings | ForEach-Object { $null = $allFindings.Add($_) }
 
-    if ($identityType -eq "User") {
-        Write-Host "  ⏳ Collecting owned devices..." -ForegroundColor Yellow
-        $deviceFindings = Get-OwnedDevices -ObjectId $TargetIdentityId
-        $deviceFindings | ForEach-Object { $null = $allFindings.Add($_) }
-    }
+  if ($identityType -eq "User") {
+    Write-Host "  ⏳ Collecting owned devices..." -ForegroundColor Yellow
+    $deviceFindings = Get-OwnedDevices -ObjectId $TargetIdentityId
+    $deviceFindings | ForEach-Object { $null = $allFindings.Add($_) }
+  }
 
-    Write-Host "  ✅ $($ownedFindings.Count) owned object finding(s)" -ForegroundColor Green
-    Write-Host ""
+  Write-Host "  ✅ $($ownedFindings.Count) owned object finding(s)" -ForegroundColor Green
+  Write-Host ""
 
-    # ── Step 7b : MFA Status (Users only) ────────────────────────────────────────
-    $mfaStatus = @{ HasMFA = $false; MethodCount = 0; StrongMethods = "N/A" }
-    if ($identityType -eq "User") {
-        Write-Host "  ⏳ Checking MFA registration..." -ForegroundColor Yellow
-        $mfaStatus = Get-MFAStatus -UserId $TargetIdentityId
+  # ── Step 7b : MFA Status (Users only) ────────────────────────────────────────
+  $mfaStatus = @{ HasMFA = $false; MethodCount = 0; StrongMethods = "N/A" }
+  if ($identityType -eq "User") {
+    Write-Host "  ⏳ Checking MFA registration..." -ForegroundColor Yellow
+    $mfaStatus = Get-MFAStatus -UserId $TargetIdentityId
 
-        if (-not $mfaStatus.HasMFA) {
-            $null = $allFindings.Add(
-                (New-Finding `
-                    -Layer             "MFAPosture" `
-                    -AttackPath        "Identity → NoMFA → CredentialHijack" `
-                    -ResourceType      "AuthenticationMethod" `
-                    -ResourceName      "No Strong MFA Registered" `
-                    -ResourceId        $TargetIdentityId `
-                    -Permission        "NoMFA" `
-                    -AssignmentType    "MFA Gap" `
-                    -Evidence          "userId=$TargetIdentityId strongMFAMethods=0 totalMethods=$($mfaStatus.MethodCount)" `
-                    -Remediation       "IMMEDIATE: Register Microsoft Authenticator (phishing-resistant preferred) or FIDO2 key. Enforce MFA via Conditional Access policy. Do NOT allow SMS or phone call as the only MFA method." `
-                    -RemediationPriority 1 `
-                    -RemediationOwner  "Identity & Access Management Team"
+    if (-not $mfaStatus.HasMFA) {
+      $null = $allFindings.Add(
+        (New-Finding `
+          -Layer             "MFAPosture" `
+          -AttackPath        "Identity → NoMFA → CredentialHijack" `
+          -ResourceType      "AuthenticationMethod" `
+          -ResourceName      "No Strong MFA Registered" `
+          -ResourceId        $TargetIdentityId `
+          -Permission        "NoMFA" `
+          -AssignmentType    "MFA Gap" `
+          -Evidence          "userId=$TargetIdentityId strongMFAMethods=0 totalMethods=$($mfaStatus.MethodCount)" `
+          -Remediation       "IMMEDIATE: Register Microsoft Authenticator (phishing-resistant preferred) or FIDO2 key. Enforce MFA via Conditional Access policy. Do NOT allow SMS or phone call as the only MFA method." `
+          -RemediationPriority 1 `
+          -RemediationOwner  "Identity & Access Management Team"
             )
-            )
-        }
-        Write-Host "  ✅ MFA check complete — HasMFA: $($mfaStatus.HasMFA)" -ForegroundColor Green
-        Write-Host ""
+      )
     }
+    Write-Host "  ✅ MFA check complete — HasMFA: $($mfaStatus.HasMFA)" -ForegroundColor Green
+    Write-Host ""
+  }
 
-    # ── Step 8 : Azure RBAC ───────────────────────────────────────────────────────
-    if ($IncludeAzureRBAC) {
-        Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-        Write-Host "  │   STEP 8 of 9  ›  Azure RBAC Role Assignments               │" -ForegroundColor DarkCyan
-        Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
-        Write-Host ""
-
-        $effectiveSubscriptionId = if ($SubscriptionId) { $SubscriptionId } else { [System.Environment]::GetEnvironmentVariable("AZURE_SUBSCRIPTION_ID") }
-        Write-Host "  ⏳ Querying Azure RBAC for subscription: $effectiveSubscriptionId" -ForegroundColor Yellow
-
-        $rbacFindings = Get-AzureRBACAssignments -ObjectId $TargetIdentityId -SubscriptionId $effectiveSubscriptionId
-        $rbacFindings | ForEach-Object { $null = $allFindings.Add($_) }
-
-        Write-Host "  ✅ $($rbacFindings.Count) Azure RBAC finding(s)" -ForegroundColor Green
-        Write-Host ""
-    }
-
-    # ── Step 9 : Score & Export ───────────────────────────────────────────────────
+  # ── Step 8 : Azure RBAC ───────────────────────────────────────────────────────
+  if ($IncludeAzureRBAC) {
     Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │   STEP 9 of 9  ›  Scoring, Export & Dashboard               │" -ForegroundColor DarkCyan
+    Write-Host "  │   STEP 8 of 9  ›  Azure RBAC Role Assignments               │" -ForegroundColor DarkCyan
     Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
     Write-Host ""
 
-    $blastScore = Measure-BlastRadius -Findings $allFindings
-    $blastBand = Get-BlastRadiusBand -Score $blastScore
+    $effectiveSubscriptionId = if ($SubscriptionId) { $SubscriptionId } else { [System.Environment]::GetEnvironmentVariable("AZURE_SUBSCRIPTION_ID") }
+    Write-Host "  ⏳ Querying Azure RBAC for subscription: $effectiveSubscriptionId" -ForegroundColor Yellow
 
-    $critCount = ($allFindings | Where-Object { $_.RiskTier -eq "Critical" }).Count
-    $highCount = ($allFindings | Where-Object { $_.RiskTier -eq "High" }).Count
+    $rbacFindings = Get-AzureRBACAssignments -ObjectId $TargetIdentityId -SubscriptionId $effectiveSubscriptionId
+    $rbacFindings | ForEach-Object { $null = $allFindings.Add($_) }
 
-    Write-Host "  💥 Blast-Radius Score : $blastScore / 100  [$($blastBand.Label)]" -ForegroundColor $(if ($blastScore -ge 61) { "Red" } elseif ($blastScore -ge 41) { "Yellow" } else { "Green" })
-    Write-Host "  🔴 Critical Findings  : $critCount" -ForegroundColor Red
-    Write-Host "  🟠 High Findings      : $highCount" -ForegroundColor Yellow
-    Write-Host "  📊 Total Findings     : $($allFindings.Count)" -ForegroundColor Cyan
+    Write-Host "  ✅ $($rbacFindings.Count) Azure RBAC finding(s)" -ForegroundColor Green
     Write-Host ""
+  }
 
-    # CSV Export
-    $csvPath = Join-Path $OutputPath "BlastRadius-$TargetIdentityId-$fileTimestamp.csv"
-    Write-Host "  ⏳ Exporting CSV..." -ForegroundColor Yellow
-    $allFindings | Export-Csv -Path $csvPath -NoTypeInformation -Force
-    Write-Host "  ✅ CSV exported → $csvPath" -ForegroundColor Green
+  # ── Step 9 : Score & Export ───────────────────────────────────────────────────
+  Write-Host "  ┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+  Write-Host "  │   STEP 9 of 9  ›  Scoring, Export & Dashboard               │" -ForegroundColor DarkCyan
+  Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+  Write-Host ""
 
-    # HTML Dashboard
-    $htmlPath = $null
-    if ($GenerateDashboard) {
-        $htmlPath = Join-Path $OutputPath "BlastRadius-$TargetIdentityId-$fileTimestamp.html"
-        Write-Host "  ⏳ Generating HTML dashboard..." -ForegroundColor Yellow
+  $blastScore = Measure-BlastRadius -Findings $allFindings
+  $blastBand = Get-BlastRadiusBand -Score $blastScore
 
-        Generate-BlastRadiusDashboard `
-            -IdentityProfile    $identityProfile `
-            -IdentityType       $identityType `
-            -Findings           $allFindings `
-            -GroupMemberships   $groupMemberships `
-            -BlastRadiusScore   $blastScore `
-            -BlastRadiusBand    $blastBand `
-            -MFAStatus          $mfaStatus `
-            -AssessmentTimestamp $assessmentTimestamp `
-            -TenantId           $TenantId `
-            -OutputFilePath     $htmlPath
+  $critCount = ($allFindings | Where-Object { $_.RiskTier -eq "Critical" }).Count
+  $highCount = ($allFindings | Where-Object { $_.RiskTier -eq "High" }).Count
 
-        Write-Host "  ✅ Dashboard generated → $htmlPath" -ForegroundColor Green
+  Write-Host "  💥 Blast-Radius Score : $blastScore / 100  [$($blastBand.Label)]" -ForegroundColor $(if ($blastScore -ge 61) { "Red" } elseif ($blastScore -ge 41) { "Yellow" } else { "Green" })
+  Write-Host "  🔴 Critical Findings  : $critCount" -ForegroundColor Red
+  Write-Host "  🟠 High Findings      : $highCount" -ForegroundColor Yellow
+  Write-Host "  📊 Total Findings     : $($allFindings.Count)" -ForegroundColor Cyan
+  Write-Host ""
 
-        if (-not $NoBrowserLaunch) {
-            Write-Host "  🌐 Opening dashboard in browser..." -ForegroundColor Cyan
-            Start-Process $htmlPath
-        }
+  # CSV Export
+  $csvPath = Join-Path $OutputPath "BlastRadius-$TargetIdentityId-$fileTimestamp.csv"
+  Write-Host "  ⏳ Exporting CSV..." -ForegroundColor Yellow
+  $allFindings | Export-Csv -Path $csvPath -NoTypeInformation -Force
+  Write-Host "  ✅ CSV exported → $csvPath" -ForegroundColor Green
+
+  # HTML Dashboard
+  $htmlPath = $null
+  if ($GenerateDashboard) {
+    $htmlPath = Join-Path $OutputPath "BlastRadius-$TargetIdentityId-$fileTimestamp.html"
+    Write-Host "  ⏳ Generating HTML dashboard..." -ForegroundColor Yellow
+
+    Generate-BlastRadiusDashboard `
+      -IdentityProfile    $identityProfile `
+      -IdentityType       $identityType `
+      -Findings           $allFindings `
+      -GroupMemberships   $groupMemberships `
+      -BlastRadiusScore   $blastScore `
+      -BlastRadiusBand    $blastBand `
+      -MFAStatus          $mfaStatus `
+      -AssessmentTimestamp $assessmentTimestamp `
+      -TenantId           $TenantId `
+      -OutputFilePath     $htmlPath
+
+    Write-Host "  ✅ Dashboard generated → $htmlPath" -ForegroundColor Green
+
+    if (-not $NoBrowserLaunch) {
+      Write-Host "  🌐 Opening dashboard in browser..." -ForegroundColor Cyan
+      Start-Process $htmlPath
     }
+  }
 
-    # ── Execution Summary ─────────────────────────────────────────────────────────
-    $scriptEndTime = Get-Date
-    $execTime = New-TimeSpan -Start $scriptStartTime -End $scriptEndTime
+  # ── Execution Summary ─────────────────────────────────────────────────────────
+  $scriptEndTime = Get-Date
+  $execTime = New-TimeSpan -Start $scriptStartTime -End $scriptEndTime
 
-    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║                    EXECUTION SUMMARY                         ║" -ForegroundColor Cyan
-    Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-    Write-Host "  ║  👤 Identity           : $($identityProfile.displayName.PadRight(33))║" -ForegroundColor Green
-    Write-Host "  ║  🆔 Type               : $($identityType.PadRight(33))║" -ForegroundColor Green
-    Write-Host "  ║  💥 Blast-Radius Score : $("$blastScore / 100  [$($blastBand.Label)]".PadRight(33))║" -ForegroundColor $(if ($blastScore -ge 61) { "Red" } elseif ($blastScore -ge 41) { "Yellow" } else { "Green" })
-    Write-Host "  ║  🔴 Critical Findings  : $($critCount.ToString().PadRight(33))║" -ForegroundColor Red
-    Write-Host "  ║  🟠 High Findings      : $($highCount.ToString().PadRight(33))║" -ForegroundColor Yellow
-    Write-Host "  ║  📊 Total Findings     : $($allFindings.Count.ToString().PadRight(33))║" -ForegroundColor Cyan
-    Write-Host "  ║  👥 Group Memberships  : $($groupMemberships.Count.ToString().PadRight(33))║" -ForegroundColor Cyan
-    Write-Host "  ║  🕐 Started            : $($scriptStartTime.ToString('hh:mm:ss tt').PadRight(33))║" -ForegroundColor Gray
-    Write-Host "  ║  🕑 Ended              : $($scriptEndTime.ToString('hh:mm:ss tt').PadRight(33))║" -ForegroundColor Gray
-    Write-Host "  ║  ⏱️ Duration           : $($execTime.ToString('hh\:mm\:ss').PadRight(33))║" -ForegroundColor Yellow
-    Write-Host "  ║  📄 CSV                : $('See OutputPath'.PadRight(33))║" -ForegroundColor Gray
-    if ($htmlPath) {
-        Write-Host "  ║  🌐 Dashboard          : $('See OutputPath'.PadRight(33))║" -ForegroundColor Gray
-    }
-    Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-    Write-Host ""
+  Write-Host ""
+  Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+  Write-Host "  ║                    EXECUTION SUMMARY                         ║" -ForegroundColor Cyan
+  Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
+  Write-Host "  ║  👤 Identity           : $($identityProfile.displayName.PadRight(33))║" -ForegroundColor Green
+  Write-Host "  ║  🆔 Type               : $($identityType.PadRight(33))║" -ForegroundColor Green
+  Write-Host "  ║  💥 Blast-Radius Score : $("$blastScore / 100  [$($blastBand.Label)]".PadRight(33))║" -ForegroundColor $(if ($blastScore -ge 61) { "Red" } elseif ($blastScore -ge 41) { "Yellow" } else { "Green" })
+  Write-Host "  ║  🔴 Critical Findings  : $($critCount.ToString().PadRight(33))║" -ForegroundColor Red
+  Write-Host "  ║  🟠 High Findings      : $($highCount.ToString().PadRight(33))║" -ForegroundColor Yellow
+  Write-Host "  ║  📊 Total Findings     : $($allFindings.Count.ToString().PadRight(33))║" -ForegroundColor Cyan
+  Write-Host "  ║  👥 Group Memberships  : $($groupMemberships.Count.ToString().PadRight(33))║" -ForegroundColor Cyan
+  Write-Host "  ║  🕐 Started            : $($scriptStartTime.ToString('hh:mm:ss tt').PadRight(33))║" -ForegroundColor Gray
+  Write-Host "  ║  🕑 Ended              : $($scriptEndTime.ToString('hh:mm:ss tt').PadRight(33))║" -ForegroundColor Gray
+  Write-Host "  ║  ⏱️ Duration           : $($execTime.ToString('hh\:mm\:ss').PadRight(33))║" -ForegroundColor Yellow
+  Write-Host "  ║  📄 CSV                : $('See OutputPath'.PadRight(33))║" -ForegroundColor Gray
+  if ($htmlPath) {
+    Write-Host "  ║  🌐 Dashboard          : $('See OutputPath'.PadRight(33))║" -ForegroundColor Gray
+  }
+  Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+  Write-Host ""
 }
