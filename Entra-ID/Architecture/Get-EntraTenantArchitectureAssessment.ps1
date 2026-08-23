@@ -330,6 +330,62 @@ Function Get-EntraTenantArchitectureAssessment {
         }
     }
 
+    Function Test-GraphTokenPermissions {
+        param (
+            [string]$AccessToken,
+            [string[]]$RequiredPermissions
+        )
+
+        try {
+            $tokenParts = $AccessToken.Split(".")
+
+            if ($tokenParts.Count -ne 3) {
+                return @{
+                    Valid              = $false
+                    MissingPermissions = $RequiredPermissions
+                }
+            }
+
+            $payload = $tokenParts[1].Replace("-", "+").Replace("_", "/")
+
+            switch ($payload.Length % 4) {
+                2 { $payload += "==" }
+                3 { $payload += "=" }
+            }
+
+            $claims = [System.Text.Encoding]::UTF8.GetString(
+                [Convert]::FromBase64String($payload)
+            ) | ConvertFrom-Json
+
+            $tokenPermissions = @()
+
+            if ($claims.scp) {
+                $tokenPermissions += $claims.scp -split " "
+            }
+
+            if ($claims.roles) {
+                $tokenPermissions += @($claims.roles)
+            }
+
+            $missingPermissions = @(
+                $RequiredPermissions | Where-Object {
+                    $_ -notin $tokenPermissions
+                }
+            )
+
+            return @{
+                Valid              = ($missingPermissions.Count -eq 0)
+                MissingPermissions = $missingPermissions
+            }
+        }
+        catch {
+            return @{
+                Valid              = $false
+                MissingPermissions = $RequiredPermissions
+            }
+        }
+    }
+
     #endregion
 
     #region ── Graph API Helper ───────────────────────────────────────────────────
@@ -2824,6 +2880,7 @@ filterFindings();
             Write-Error "  ✖ Failed to obtain access token. Verify ClientId, ClientSecret, and TenantId."
             return
         }
+        $global:accessToken = $token
         $global:TenantId = $TenantId
         Write-Host "  ✅ Client Credentials authentication successful." -ForegroundColor Green
     }
@@ -2833,6 +2890,46 @@ filterFindings();
         $global:accessToken = $AccessToken
         $global:TenantId = $TenantId
         Write-Host "  ✅ BYOT token accepted." -ForegroundColor Green
+    }
+
+    Write-Host ""
+
+    # ── Step 1.1: Validate Required Graph Permissions ─────────────────────────────
+    Write-Host "  🔍 Validating required Microsoft Graph permissions..." -ForegroundColor Yellow
+
+    $requiredGraphPermissions = @(
+        "Directory.Read.All"
+        "Policy.Read.All"
+        "Application.Read.All"
+        "AuditLog.Read.All"
+        "RoleManagement.Read.Directory"
+        "IdentityRiskyUser.Read.All"
+        "UserAuthenticationMethod.Read.All"
+        "Reports.Read.All"
+        "AccessReview.Read.All"
+    )
+
+    $permissionCheck = Test-GraphTokenPermissions `
+        -AccessToken $global:accessToken `
+        -RequiredPermissions $requiredGraphPermissions
+
+    if (-not $permissionCheck.Valid) {
+        Write-Host ""
+        Write-Host "  ⚠️  Warning: Some required Microsoft Graph permissions are missing." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  Missing permissions:" -ForegroundColor Yellow
+
+        foreach ($permission in $permissionCheck.MissingPermissions) {
+            Write-Host "    • $permission" -ForegroundColor Yellow
+        }
+
+        Write-Host ""
+        Write-Host "  Assessment will continue with the available permissions." -ForegroundColor Yellow
+        Write-Host "  Some assessment values or findings may not be available." -ForegroundColor Yellow
+        Write-Host ""
+    }
+    else {
+        Write-Host "  ✅ All required Microsoft Graph permissions validated." -ForegroundColor Green
     }
 
     Write-Host ""
