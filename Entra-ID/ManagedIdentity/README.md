@@ -8,7 +8,7 @@
 
 | Script | Synopsis | Version | Last Modified |
 |---|---|---|---|
-| [Grant-GraphAPIPermissionToManagedIdentity.ps1](./Grant-GraphAPIPermissionToManagedIdentity.ps1) | Grants a Microsoft Graph API Application permission (App Role) to a Managed Identity in Entra ID. | 1.1 | 28 Jul 2026 |
+| [Grant-GraphAPIPermissionToManagedIdentity.ps1](./Grant-GraphAPIPermissionToManagedIdentity.ps1) | Grants a Microsoft Graph API Application permission (App Role) to a Managed Identity in Entra ID. | 1.1 | 31 Jul 2026 |
 
 ---
 
@@ -143,4 +143,5 @@ Modified-On  : 27 July 2026
 </details>
 
 <!-- SCRIPT-CATALOG:END -->
+
 
