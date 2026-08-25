@@ -108,7 +108,7 @@ Modified-On  : 25 August 2026
     1.1 (25-Aug-2026) - Fixed OutputFiles tracking under -WhatIf (moved Add calls outside
                         ShouldProcess guard); fixed -Recurse folder enumeration ambiguity
                         via explicit Recurse.IsPresent branch.    
-                        
+
     ─────────────────────────────────────────────────────────────────────────────
     Pre-Requisites:
     ─────────────────────────────────────────────────────────────────────────────
@@ -319,6 +319,56 @@ Function Generate-MarkdownDocumentation {
             }
         }
 
+        # --- Nested helper: pretty-print the result summary ---
+        function Write-DocumentationSummary {
+            param([PSCustomObject]$Result)
+
+            $divider = '─' * 60
+
+            Write-Host ''
+            Write-Host $divider -ForegroundColor DarkGray
+            Write-Host '  Generate-MarkdownDocumentation — Run Summary' -ForegroundColor Cyan
+            Write-Host $divider -ForegroundColor DarkGray
+
+            Write-Host ''
+            Write-Host ('  Folders Scanned    : {0}' -f $Result.FoldersScanned)   -ForegroundColor White
+            Write-Host ('  Folders Documented : {0}' -f $Result.FoldersDocumented) -ForegroundColor White
+            Write-Host ('  Scripts Documented : {0}' -f $Result.ScriptsDocumented) -ForegroundColor White
+
+            # --- Output Files ---
+            Write-Host ''
+            Write-Host '  Output Files' -ForegroundColor Yellow
+            Write-Host ('  ' + ('─' * 58)) -ForegroundColor DarkGray
+            if ($Result.OutputFiles.Count -gt 0) {
+                foreach ($file in $Result.OutputFiles) {
+                    Write-Host ('    ✔  {0}' -f $file) -ForegroundColor Green
+                }
+            }
+            else {
+                Write-Host '    (none — WhatIf or no qualifying folders)' -ForegroundColor DarkGray
+            }
+
+            # --- Missing Metadata ---
+            Write-Host ''
+            Write-Host '  Scripts With Missing Metadata' -ForegroundColor Yellow
+            Write-Host ('  ' + ('─' * 58)) -ForegroundColor DarkGray
+            if ($Result.ScriptsWithMissingMetadata.Count -gt 0) {
+                foreach ($issue in $Result.ScriptsWithMissingMetadata) {
+                    $shortFile = Split-Path -Path $issue.File -Leaf
+                    $folder = Split-Path -Path (Split-Path -Path $issue.File -Parent) -Leaf
+                    Write-Host ('    ✘  {0}\{1}' -f $folder, $shortFile) -ForegroundColor Red
+                    Write-Host ('       Issue : {0}' -f $issue.Issue)    -ForegroundColor DarkRed
+                }
+            }
+            else {
+                Write-Host '    ✔  All scripts have complete metadata' -ForegroundColor Green
+            }
+
+            Write-Host ''
+            Write-Host $divider -ForegroundColor DarkGray
+            Write-Host ''
+        }
+
         Write-Verbose -Message "=== Generate-MarkdownDocumentation : Mode = $Mode ==="
     }
 
@@ -392,13 +442,16 @@ Function Generate-MarkdownDocumentation {
                 $outputFiles.Add($OutputPath)   # ← moved outside
             }
 
-            [PSCustomObject]@{
+            $result = [PSCustomObject]@{
                 FoldersScanned             = @($candidateFolders).Count
                 FoldersDocumented          = $foldersDocumented
                 ScriptsDocumented          = $scriptsDocumented
                 ScriptsWithMissingMetadata = $metadataIssues
                 OutputFiles                = $outputFiles
             }
+
+            Write-DocumentationSummary -Result $result
+            return $result
         }
         catch {
             Write-Warning -Message "Documentation generation failed: $($_.Exception.Message)"
