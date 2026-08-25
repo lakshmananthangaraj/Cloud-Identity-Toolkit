@@ -1,9 +1,9 @@
 <#
 
 Author       : Lakshmanan Thangaraj
-Version      : 1.0
+Version      : 1.1
 Created-On   : 27 July 2026
-Modified-On  : 27 July 2026
+Modified-On  : 25 August 2026
 
 .SYNOPSIS
     Scans a folder tree of PowerShell scripts and generates/updates a Markdown
@@ -105,7 +105,10 @@ Modified-On  : 27 July 2026
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
     1.0 (27-Jul-2026) - Initial release.
-    
+    1.1 (25-Aug-2026) - Fixed OutputFiles tracking under -WhatIf (moved Add calls outside
+                        ShouldProcess guard); fixed -Recurse folder enumeration ambiguity
+                        via explicit Recurse.IsPresent branch.    
+                        
     ─────────────────────────────────────────────────────────────────────────────
     Pre-Requisites:
     ─────────────────────────────────────────────────────────────────────────────
@@ -321,11 +324,14 @@ Function Generate-MarkdownDocumentation {
 
     Process {
         try {
-            $getChildItemParams = @{ Path = $SourcePath; Directory = $true; ErrorAction = 'Stop' }
-            if ($Recurse) { $getChildItemParams['Recurse'] = $true }
-
             $rootFolder = Get-Item -Path $SourcePath -ErrorAction Stop
-            $subFolders = Get-ChildItem @getChildItemParams
+            $subFolders = if ($Recurse.IsPresent) {
+                Get-ChildItem -Path $SourcePath -Directory -Recurse -ErrorAction Stop
+            }
+            else {
+                Get-ChildItem -Path $SourcePath -Directory -ErrorAction Stop
+            }
+
             $candidateFolders = @($rootFolder) + @($subFolders) | Where-Object { $ExcludeFolder -notcontains $_.Name }
 
             $scriptsDocumented = 0
@@ -364,7 +370,7 @@ Function Generate-MarkdownDocumentation {
                     if ($PSCmdlet.ShouldProcess($readmePath, 'Update script catalog section')) {
                         Set-Content -Path $readmePath -Value $updatedContent -Encoding UTF8
                     }
-                    $outputFiles.Add($readmePath)
+                    $outputFiles.Add($readmePath)   # ← moved outside; always tracked regardless of -WhatIf
                 }
                 else {
                     $catalogSections.Add($tableMarkdown)
@@ -382,8 +388,8 @@ Function Generate-MarkdownDocumentation {
                 if ($PSCmdlet.ShouldProcess($OutputPath, 'Write consolidated script catalog')) {
                     $catalogContent = "$catalogFileMarker`n# Script Catalog`n`nGenerated $(Get-Date -Format 'dd MMM yyyy, HH:mm').`n`n" + ($catalogSections -join "`n")
                     Set-Content -Path $OutputPath -Value $catalogContent -Encoding UTF8
-                    $outputFiles.Add($OutputPath)
                 }
+                $outputFiles.Add($OutputPath)   # ← moved outside
             }
 
             [PSCustomObject]@{
