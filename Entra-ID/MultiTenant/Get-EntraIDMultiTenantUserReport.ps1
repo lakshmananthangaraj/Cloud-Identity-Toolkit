@@ -2,7 +2,7 @@
 
 .AUTHOR
     Author       : Lakshmanan Thangaraj
-    Version      : 1.0
+    Version      : 1.1
     Created-On   : 12 September 2026
     Modified-On  : 12 September 2026
 
@@ -170,6 +170,10 @@
     ─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
+    1.1 (12-Sep-2026) - Added parallel user enrichment via runspace pool 
+                        ($ThrottleLimit param); manager and license calls now run 
+                        concurrently per tenant.
+
     1.0 (12-Sep-2026) - Initial public release. Refactored from internal version
                         with standards compliance, SecureString auth, automatic
                         token renewal, Write-Progress support, and full help block.
@@ -316,7 +320,11 @@ Function Get-EntraIDMultiTenantUserReport {
 
         [Parameter(Mandatory = $false, HelpMessage = "Full path for the exported CSV report.")]
         [ValidateNotNullOrEmpty()]
-        [string] $ExportPath = "C:\Temp\EntraID-Multi-Tenants-UserAccount-Report.csv"
+        [string] $ExportPath = "C:\Temp\EntraID-Multi-Tenants-UserAccount-Report.csv",
+
+        [Parameter(Mandatory = $false, HelpMessage = "Maximum number of users to process in parallel. Default is 10.")]
+        [ValidateRange(1, 20)]
+        [int] $ThrottleLimit = 10
     )
 
 
@@ -668,14 +676,15 @@ Function Get-EntraIDMultiTenantUserReport {
 
     Write-Host ""
     Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║  👥  User Account Report — All Company Directories                      ║" -ForegroundColor Cyan
+    Write-Host "  ║  👥  Entra ID — Multi-Tenant User Account Report                         ║" -ForegroundColor Cyan
     Write-Host "  ║                                                                          ║" -ForegroundColor Cyan
-    Write-Host "  ║  Think of this like taking a roll call across all your company           ║" -ForegroundColor Cyan
-    Write-Host "  ║  buildings at once — we collect every person's info into one list.       ║" -ForegroundColor Cyan
+    Write-Host "  ║  Connecting to each tenant, collecting all user accounts,                ║" -ForegroundColor Cyan
+    Write-Host "  ║  and consolidating everything into a single report.                      ║" -ForegroundColor Cyan
     Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  🕐  Started  : $($scriptStartTime.ToString('dd-MMM-yyyy  HH:mm:ss'))" -ForegroundColor White
     Write-Host "  🏢  Checking : $($TenantIds.Count) company director$(if ($TenantIds.Count -eq 1) {'y'} else {'ies'})" -ForegroundColor White
+    Write-Host "  ⚡  Parallel : $ThrottleLimit users processed simultaneously per tenant" -ForegroundColor White
     Write-Host ""
 
     $allUserRecords = New-Object System.Collections.ArrayList
@@ -720,24 +729,36 @@ Function Get-EntraIDMultiTenantUserReport {
         Write-Host ""
         Write-Host "  ⚙️   Now collecting extra details for each person..." -ForegroundColor Yellow
         Write-Host "      (Their manager, software subscriptions, and last login time)" -ForegroundColor DarkGray
-        Write-Host "      Hang tight — the more people there are, the longer this takes. ☕" -ForegroundColor DarkGray
+        Write-Host "      Running $ThrottleLimit users in parallel — hang tight. ☕" -ForegroundColor DarkGray
         Write-Host ""
 
-        $processedCount = 0
+        $syncedRecords = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
+        $accessTokenSnapshot = $global:_ctx.AccessToken   # snapshot — parallel threads cannot call the nested functions
+        $tenantSnapshot = $tenant
 
-        foreach ($user in $users) {
-            $processedCount++
+        $users | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
 
-            $pct = [Math]::Round(($processedCount / $totalUsers) * 100)
-            Write-Progress `
-                -Activity        "📂  $tenantLabel — Collecting people's details" `
-                -Status          "Looking up person $processedCount of $totalUsers  |  $($user.DisplayName)  |  $pct% done" `
-                -PercentComplete $pct
+            $user = $_
+            $accessToken = $using:accessTokenSnapshot
+            $tenantLocal = $using:tenantSnapshot
+            $bag = $using:syncedRecords
 
-            Invoke-EntraIDTokenRefreshIfNeeded
+            $headers = @{ "Authorization" = "Bearer $accessToken" }
 
-            $manager = Get-EntraIDManagerDetails  -UserId $user.Id
-            $licenses = Get-EntraIDAssignedLicenses -UserId $user.Id
+            # Inline manager call (cannot call nested functions from parallel scope)
+            Try {
+                $mgr = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/users/$($user.Id)/manager" `
+                    -Headers $headers -Method Get -ErrorAction Stop
+            }
+            Catch { $mgr = $null }
+
+            # Inline license call
+            Try {
+                $lic = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/users/$($user.Id)/licenseDetails" `
+                    -Headers $headers -Method Get -ErrorAction Stop
+                $licenses = $lic.value
+            }
+            Catch { $licenses = @() }
 
             $record = [PSCustomObject]@{
                 'Object ID'                    = $user.Id
@@ -752,20 +773,23 @@ Function Get-EntraIDMultiTenantUserReport {
                 'Last Successful Sign-In'      = $user.LastSuccessfulSignInDateTime
                 'Last Interactive Sign-In'     = $user.LastSignInDateTime
                 'Last Non-Interactive Sign-In' = $user.LastNonInteractiveSignInDateTime
-                'Manager Display Name'         = if ($manager -and $manager.PSObject.Properties['displayName']) { $manager.displayName }        else { $null }
-                'Manager UPN'                  = if ($manager -and $manager.PSObject.Properties['userPrincipalName']) { $manager.userPrincipalName }  else { $null }
-                'Manager Email'                = if ($manager -and $manager.PSObject.Properties['mail']) { $manager.mail }               else { $null }
+                'Manager Display Name'         = if ($mgr -and $mgr.PSObject.Properties['displayName']) { $mgr.displayName }        else { $null }
+                'Manager UPN'                  = if ($mgr -and $mgr.PSObject.Properties['userPrincipalName']) { $mgr.userPrincipalName }  else { $null }
+                'Manager Email'                = if ($mgr -and $mgr.PSObject.Properties['mail']) { $mgr.mail }               else { $null }
                 'Is Licence Assigned'          = if ($licenses -and $licenses.Count -gt 0) { 'Yes' }                                  else { 'No' }
                 'Assigned Licences'            = if ($licenses -and $licenses.Count -gt 0) { ($licenses.skuPartNumber -join ' ; ') }  else { '-' }
                 'Assigned Licence SKU IDs'     = if ($licenses -and $licenses.Count -gt 0) { ($licenses.skuId -join ' ; ') }          else { '-' }
-                'Tenant ID'                    = if ($tenant) { $tenant.TenantId }            else { $null }
-                'Tenant Name'                  = if ($tenant) { $tenant.TenantName }          else { $null }
-                'Tenant Primary Domain'        = if ($tenant) { $tenant.TenantPrimaryDomain } else { $null }
-                'Tenant Country'               = if ($tenant) { $tenant.Country }             else { $null }
+                'Tenant ID'                    = if ($tenantLocal) { $tenantLocal.TenantId }            else { $null }
+                'Tenant Name'                  = if ($tenantLocal) { $tenantLocal.TenantName }          else { $null }
+                'Tenant Primary Domain'        = if ($tenantLocal) { $tenantLocal.TenantPrimaryDomain } else { $null }
+                # 'Tenant Country'               = if ($tenantLocal) { $tenantLocal.Country }             else { $null }
             }
 
-            $null = $allUserRecords.Add($record)
+            $null = $bag.Add($record)
         }
+
+        # Merge parallel results back into the main collection
+        foreach ($r in $syncedRecords) { $null = $allUserRecords.Add($r) }
 
         Write-Progress -Activity "📂  $tenantLabel — Collecting people's details" -Completed
         Write-Host "  ✅  All done for $tenantLabel  ($totalUsers people collected)" -ForegroundColor Green
@@ -805,15 +829,16 @@ Function Get-EntraIDMultiTenantUserReport {
 
     Write-Host ""
     Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "  ║  🎉  All done! Here is a quick summary of what we collected:            ║" -ForegroundColor Green
+    Write-Host "  ║  🎉  All done! Here is a quick summary of what we collected:             ║" -ForegroundColor Green
     Write-Host "  ╠══════════════════════════════════════════════════════════════════════════╣" -ForegroundColor Green
     Write-Host "  ║                                                                          ║" -ForegroundColor Green
-    Write-Host "  ║  🕐  Started at    : $($scriptStartTime.ToString('dd-MMM-yyyy  HH:mm:ss'))                         ║" -ForegroundColor Green
-    Write-Host "  ║  🏁  Finished at   : $($scriptEndTime.ToString('dd-MMM-yyyy  HH:mm:ss'))                           ║" -ForegroundColor Green
-    Write-Host "  ║  ⏱️  Time taken    : $($executionTime.ToString('hh\:mm\:ss'))  (hours:minutes:seconds)             ║" -ForegroundColor Green
+    Write-Host ("  ║  🕐  Started at     : {0,-51}║" -f $scriptStartTime.ToString('dd-MMM-yyyy  HH:mm:ss')) -ForegroundColor Green
+    Write-Host ("  ║  🏁  Finished at    : {0,-51}║" -f $scriptEndTime.ToString('dd-MMM-yyyy  HH:mm:ss'))   -ForegroundColor Green
+    Write-Host ("  ║  ⏱️  Time taken     : {0,-51}║" -f ($executionTime.ToString('hh\:mm\:ss') + '  (hours:minutes:seconds)')) -ForegroundColor Green
     Write-Host "  ║                                                                          ║" -ForegroundColor Green
-    Write-Host "  ║  🏢  Directories   : $($TenantIds.Count) checked                                        ║" -ForegroundColor Green
-    Write-Host "  ║  👥  People found  : $($allUserRecords.Count) total (across all directories)                ║" -ForegroundColor Green
+    Write-Host ("  ║  🏢  Directories    : {0,-51}║" -f "$($TenantIds.Count) checked")                      -ForegroundColor Green
+    Write-Host ("  ║  👥  People found   : {0,-51}║" -f "$($allUserRecords.Count) total (across all directories)") -ForegroundColor Green
+    Write-Host ("  ║  ⚡  Parallel limit : {0,-51}║" -f "$ThrottleLimit users at a time") -ForegroundColor Green
     Write-Host "  ║                                                                          ║" -ForegroundColor Green
     Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Green
     Write-Host ""
