@@ -557,7 +557,7 @@ Function Get-EntraMultiTenantConfigurationDriftAssessment {
             TenantId        = $tenantId
             TenantName      = $tenantName
             BusinessUnit    = $tenantConfig.BusinessUnit
-            AssessmentStart = [datetime]::UtcNow
+            AssessmentStart = [datetime]::UtcNow.ToString("o")
             AssessmentEnd   = $null
             Status          = "InProgress"
             AuthStatus      = "Unknown"
@@ -661,7 +661,7 @@ Function Get-EntraMultiTenantConfigurationDriftAssessment {
             [System.GC]::Collect()
         }
 
-        $tenantResult.AssessmentEnd = [datetime]::UtcNow
+        $tenantResult.AssessmentEnd = [datetime]::UtcNow.ToString("o")
         $allTenantResults.Add($tenantResult)
 
         Write-Host ""
@@ -696,7 +696,7 @@ Function Get-EntraMultiTenantConfigurationDriftAssessment {
         Controls          = Get-BaselineControlCatalog -Baseline $baseline -ActiveDomains $activeDomains
         Findings          = $allTenantResults | ForEach-Object { $_.Findings } | Where-Object { $_ }
         Nodes             = Get-GraphNodes -TenantResults $allTenantResults
-        Edges             = Get-GraphEdges -TenantResults $allTenantResults
+        Edges             = Get-GraphEdges -TenantResults $allTenantResults -AssessmentId $assessmentId
         _future           = @{
             ManagedIdentityAuth  = $false
             HistoricalComparison = $false
@@ -1511,11 +1511,14 @@ Function Invoke-DriftDetection {
             continue
         }
 
-        switch ($domain) {
-            "ConditionalAccess" { $findings.AddRange((Get-CaDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline)) }
-            "MFA" { $findings.AddRange((Get-MfaDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline)) }
-            "PIM" { $findings.AddRange((Get-PimDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline)) }
-            "ExternalIdentity" { $findings.AddRange((Get-ExtDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline)) }
+        $domainFindings = switch ($domain) {
+            "ConditionalAccess" { Get-CaDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline }
+            "MFA" { Get-MfaDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline }
+            "PIM" { Get-PimDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline }
+            "ExternalIdentity" { Get-ExtDriftFindings  -TenantId $TenantId -TenantName $TenantName -CollectorResult $result -Baseline $Baseline }
+        }
+        foreach ($f in $domainFindings) {
+            if ($null -ne $f) { $findings.Add($f) }
         }
     }
 
@@ -2132,7 +2135,10 @@ Function Get-GraphNodes {
 }
 
 Function Get-GraphEdges {
-    param ([System.Collections.Generic.List[PSCustomObject]]$TenantResults)
+    param (
+        [System.Collections.Generic.List[PSCustomObject]]$TenantResults,
+        [string]$AssessmentId
+    )
 
     # V1: no meaningful edges (single root enterprise node → tenant nodes)
     # Schema ready for V2 cross-tenant trust relationships, PIM delegation edges, etc.
@@ -2140,7 +2146,7 @@ Function Get-GraphEdges {
 
     $edges.Add([PSCustomObject]@{
             Source     = "enterprise:root"
-            Target     = "assessment:$([System.Guid]::NewGuid())"
+            Target     = "assessment:$AssessmentId"
             Type       = "Assessment"
             Properties = @{ Version = $Script:AssessmentVersion }
         })
@@ -2204,8 +2210,8 @@ Function Export-MetricsCsv {
                 LowDrifts              = if ($score) { $score.LowDrifts } else { "" }
                 NotAssessedControls    = if ($score) { $score.NotAssessedControls } else { "" }
                 CoveragePercentage     = if ($score) { $score.CoveragePercentage } else { "" }
-                AssessmentStart        = $t.AssessmentStart.ToString("o")
-                AssessmentEnd          = if ($t.AssessmentEnd) { $t.AssessmentEnd.ToString("o") } else { "" }
+                AssessmentStart        = $t.AssessmentStart
+                AssessmentEnd          = if ($t.AssessmentEnd) { $t.AssessmentEnd } else { "" }
                 CAStatus               = if ($t.Domains["ConditionalAccess"]) { $t.Domains["ConditionalAccess"].Status } else { "NotAssessed" }
                 MFAStatus              = if ($t.Domains["MFA"]) { $t.Domains["MFA"].Status } else { "NotAssessed" }
                 PIMStatus              = if ($t.Domains["PIM"]) { $t.Domains["PIM"].Status } else { "NotAssessed" }
@@ -2229,6 +2235,30 @@ Function Export-AssessmentJson {
     )
 
     try {
+        $serializablePayload = $Payload | Select-Object * -ExcludeProperty Tenants
+        $serializablePayload | Add-Member -MemberType NoteProperty -Name Tenants -Value (
+            $Payload.Tenants | ForEach-Object {
+                $t = $_
+                $t | Select-Object TenantId, TenantName, BusinessUnit,
+                AssessmentStart, AssessmentEnd,
+                Status, AuthStatus, Score, Errors,
+                Findings,
+                @{ N = 'Domains'; E = {
+                        $summary = [ordered]@{}
+                        foreach ($k in $t.Domains.Keys) {
+                            $d = $t.Domains[$k]
+                            $summary[$k] = [PSCustomObject]@{
+                                Status      = $d.Status
+                                CollectedAt = $d.CollectedAt
+                                Metrics     = $d.Metrics
+                                Errors      = $d.Errors
+                            }
+                        }
+                        $summary
+                    }
+                }
+            }
+        )
         # Depth 10 handles nested CA policy objects
         $json = $Payload | ConvertTo-Json -Depth 10 -ErrorAction Stop
         $json | Out-File -LiteralPath $Path -Encoding UTF8 -Force -ErrorAction Stop
