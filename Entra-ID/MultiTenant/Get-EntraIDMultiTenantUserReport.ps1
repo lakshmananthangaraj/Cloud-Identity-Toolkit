@@ -462,7 +462,7 @@ Function Get-EntraIDMultiTenantUserReport {
     # automatically by honouring the Retry-After header.
     #─────────────────────────────────────────────────────────────────────────────
 
-    Function Invoke-GraphRequest {
+    Function Invoke-GraphRequestAPI {
         param
         (
             [Parameter(Mandatory = $true)]
@@ -528,7 +528,7 @@ Function Get-EntraIDMultiTenantUserReport {
         do {
             Invoke-EntraIDTokenRefreshIfNeeded
 
-            $data = Invoke-GraphRequest -Uri $uri -AdditionalHeaders @{ "ConsistencyLevel" = "eventual" }
+            $data = Invoke-GraphRequestAPI -Uri $uri -AdditionalHeaders @{ "ConsistencyLevel" = "eventual" }
 
             if (-not $data) {
                 Write-Warning "No data returned from users endpoint. Stopping pagination."
@@ -577,7 +577,7 @@ Function Get-EntraIDMultiTenantUserReport {
         )
 
         $uri = "https://graph.microsoft.com/beta/users/$UserId/manager"
-        return Invoke-GraphRequest -Uri $uri
+        return Invoke-GraphRequestAPI -Uri $uri
     }
 
 
@@ -590,7 +590,7 @@ Function Get-EntraIDMultiTenantUserReport {
         )
 
         $uri = "https://graph.microsoft.com/beta/users/$UserId/licenseDetails"
-        $data = Invoke-GraphRequest -Uri $uri
+        $data = Invoke-GraphRequestAPI -Uri $uri
 
         if ($data -and $data.value) {
             return $data.value
@@ -602,7 +602,7 @@ Function Get-EntraIDMultiTenantUserReport {
 
     Function Get-EntraIDTenantDetails {
         $uri = "https://graph.microsoft.com/beta/organization"
-        $data = Invoke-GraphRequest -Uri $uri
+        $data = Invoke-GraphRequestAPI -Uri $uri
 
         if (-not $data -or -not $data.value) {
             Write-Warning "Could not retrieve tenant details."
@@ -676,42 +676,42 @@ Function Get-EntraIDMultiTenantUserReport {
 
         # ── Stat card metrics ──────────────────────────────────────────────────
 
-        $cntEnabled         = ($UserRecords | Where-Object { $_.'Account Enabled' -eq $true  }).Count
-        $cntDisabled        = ($UserRecords | Where-Object { $_.'Account Enabled' -eq $false }).Count
-        $cntLicensed        = ($UserRecords | Where-Object { $_.'Is Licence Assigned' -eq 'Yes' }).Count
-        $cntUnlicensed      = ($UserRecords | Where-Object { $_.'Is Licence Assigned' -eq 'No'  }).Count
-        $cntGuest           = ($UserRecords | Where-Object { $_.'User Type' -eq 'Guest' }).Count
-        $cntSynced          = ($UserRecords | Where-Object { $_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True' }).Count
+        $cntEnabled         = @($UserRecords | Where-Object { $_.'Account Enabled' -eq $true  }).Count
+        $cntDisabled        = @($UserRecords | Where-Object { $_.'Account Enabled' -eq $false }).Count
+        $cntLicensed        = @($UserRecords | Where-Object { $_.'Is Licence Assigned' -eq 'Yes' }).Count
+        $cntUnlicensed      = @($UserRecords | Where-Object { $_.'Is Licence Assigned' -eq 'No'  }).Count
+        $cntGuest           = @($UserRecords | Where-Object { $_.'User Type' -eq 'Guest' }).Count
+        $cntSynced          = @($UserRecords | Where-Object { $_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True' }).Count
 
         # ── Sign-in inactivity buckets (days since last successful sign-in) ────
         # Users with no sign-in date at all are treated as "Never Signed In"
 
         $now = Get-Date
 
-        $cntNeverSignedIn   = ($UserRecords | Where-Object { [string]::IsNullOrEmpty($_.'Last Successful Sign-In') }).Count
-        $cntInactive90      = ($UserRecords | Where-Object {
+        $cntNeverSignedIn   = @($UserRecords | Where-Object { [string]::IsNullOrEmpty($_.'Last Successful Sign-In') }).Count
+        $cntInactive90      = @($UserRecords | Where-Object {
             -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
             ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -gt 90
         }).Count
-        $cntInactive30      = ($UserRecords | Where-Object {
+        $cntInactive30      = @($UserRecords | Where-Object {
             -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
             ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -gt 30 -and
             ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -le 90
         }).Count
-        $cntActiveRecent    = ($UserRecords | Where-Object {
+        $cntActiveRecent    = @($UserRecords | Where-Object {
             -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
             ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -le 30
         }).Count
 
         # ── Risk / governance exception counts ────────────────────────────────
 
-        $cntNoManager       = ($UserRecords | Where-Object {
+        $cntNoManager       = @($UserRecords | Where-Object {
             $_.'Account Enabled' -eq $true -and [string]::IsNullOrEmpty($_.'Manager UPN')
         }).Count
-        $cntLicensedDisabled = ($UserRecords | Where-Object {
+        $cntLicensedDisabled = @($UserRecords | Where-Object {
             $_.'Account Enabled' -eq $false -and $_.'Is Licence Assigned' -eq 'Yes'
         }).Count
-        $cntStaleLicensed   = ($UserRecords | Where-Object {
+        $cntStaleLicensed   = @($UserRecords | Where-Object {
             $_.'Is Licence Assigned' -eq 'Yes' -and
             -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
             ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -gt 90
@@ -719,13 +719,13 @@ Function Get-EntraIDMultiTenantUserReport {
 
         # ── Data quality counts ────────────────────────────────────────────────
 
-        $cntNoEmail         = ($UserRecords | Where-Object {
+        $cntNoEmail         = @($UserRecords | Where-Object {
             $_.'User Type' -ne 'Guest' -and [string]::IsNullOrEmpty($_.'Email')
         }).Count
-        $cntNoDept          = ($UserRecords | Where-Object {
+        $cntNoDept          = @($UserRecords | Where-Object {
             $_.'User Type' -ne 'Guest' -and [string]::IsNullOrEmpty($_.'Department')
         }).Count
-        $cntNoDisplayName   = ($UserRecords | Where-Object {
+        $cntNoDisplayName   = @($UserRecords | Where-Object {
             [string]::IsNullOrEmpty($_.'Display Name')
         }).Count
 
@@ -742,11 +742,11 @@ Function Get-EntraIDMultiTenantUserReport {
                 $tDomain = ConvertTo-HtmlJsonSafe ($grp[0].'Tenant Primary Domain' ?? '')
                 $tId     = ConvertTo-HtmlJsonSafe ($_.Name ?? '')
                 $tTotal  = $grp.Count
-                $tEn     = ($grp | Where-Object { $_.'Account Enabled' -eq $true  }).Count
-                $tDis    = ($grp | Where-Object { $_.'Account Enabled' -eq $false }).Count
-                $tLic    = ($grp | Where-Object { $_.'Is Licence Assigned' -eq 'Yes' }).Count
-                $tGuest  = ($grp | Where-Object { $_.'User Type' -eq 'Guest' }).Count
-                $tSynced = ($grp | Where-Object { $_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True' }).Count
+                $tEn     = @($grp | Where-Object { $_.'Account Enabled' -eq $true  }).Count
+                $tDis    = @($grp | Where-Object { $_.'Account Enabled' -eq $false }).Count
+                $tLic    = @($grp | Where-Object { $_.'Is Licence Assigned' -eq 'Yes' }).Count
+                $tGuest  = @($grp | Where-Object { $_.'User Type' -eq 'Guest' }).Count
+                $tSynced = @($grp | Where-Object { $_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True' }).Count
                 "{`"id`":`"$tId`",`"name`":`"$tName`",`"domain`":`"$tDomain`",`"total`":$tTotal,`"enabled`":$tEn,`"disabled`":$tDis,`"licensed`":$tLic,`"guest`":$tGuest,`"synced`":$tSynced}"
             }
         ) -join ','
@@ -1816,7 +1816,7 @@ document.addEventListener('keydown', e => {
         Write-Host "  📋  Getting the full list of people in this directory..." -ForegroundColor Yellow
         Write-Host "      (This is like downloading the whole staff list — may take a moment)" -ForegroundColor DarkGray
         $users = Get-EntraIDAllUsers
-        $totalUsers = $users.Count
+        $totalUsers = @($users).Count
 
         if ($totalUsers -eq 0) {
             Write-Host "  ⚠️   No people found. This may be a permissions issue — check that" -ForegroundColor Yellow
