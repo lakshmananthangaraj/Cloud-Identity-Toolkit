@@ -113,7 +113,7 @@
 .PARAMETER ExportPath
     Full file path for the exported CSV report.
 
-    Defaults to: C:\Temp\EntraID-Multi-Tenants-UserAccount-Report.csv
+    Defaults to: EntraID-MultiTenant-UserReport.csv
 
     The folder is created automatically if it does not already exist.
 
@@ -347,7 +347,7 @@ Function Get-EntraIDMultiTenantUserReport {
 
         [Parameter(Mandatory = $false, HelpMessage = "Full path for the exported CSV report.")]
         [ValidateNotNullOrEmpty()]
-        [string] $ExportPath = "C:\Temp\EntraID-Multi-Tenants-UserAccount-Report.csv",
+        [string] $ExportPath = "EntraID-MultiTenant-UserReport.csv",
 
         [Parameter(Mandatory = $false, HelpMessage = "Maximum number of users to process in parallel. Default is 10.")]
         [ValidateRange(1, 20)]
