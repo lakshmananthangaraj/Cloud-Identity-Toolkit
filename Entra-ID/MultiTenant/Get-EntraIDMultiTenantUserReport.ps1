@@ -2,9 +2,9 @@
 
 .AUTHOR
     Author       : Lakshmanan Thangaraj
-    Version      : 1.1
+    Version      : 1.2
     Created-On   : 12 September 2026
-    Modified-On  : 12 September 2026
+    Modified-On  : 14 September 2026
 
 .SYNOPSIS
     Generates a consolidated user account report across one or more Microsoft Entra ID tenants.
@@ -117,6 +117,28 @@
 
     The folder is created automatically if it does not already exist.
 
+.PARAMETER GenerateHtmlReport
+    When this switch is present, the script generates an additional HTML dashboard report
+    alongside the CSV export.
+
+    The HTML file is saved to the same folder as -ExportPath, using the same base file name
+    with an .html extension.
+
+    Example: if -ExportPath is "D:\Reports\MyReport.csv", the HTML report is saved as
+             "D:\Reports\MyReport.html"
+
+    When -ExportPath is not specified, the HTML defaults to:
+    C:\Temp\EntraID-Multi-Tenants-UserAccount-Report.html
+
+    The dashboard includes 7 enterprise-focused tabs:
+      • Executive Overview  — KPIs and overall identity posture
+      • Tenant Overview     — per-tenant user and governance breakdown
+      • User Governance     — searchable, sortable full user inventory
+      • Sign-In & Inactivity— inactive, stale, and never-signed-in users
+      • License & Identity  — licensing and usage insights
+      • Governance & Risk   — actionable identity governance exceptions
+      • Data Quality        — missing data and collection anomalies
+
 .INPUTS
     None. This function does not accept pipeline input.
 
@@ -170,6 +192,11 @@
     ─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
+    1.2 (14-Sep-2026) - Added -GenerateHtmlReport switch. When present, generates a
+                        7-tab HTML dashboard alongside the existing CSV export. HTML
+                        is written to the same folder as -ExportPath with a .html
+                        extension. No changes to existing CSV logic.
+
     1.1 (12-Sep-2026) - Added parallel user enrichment via runspace pool 
                         ($ThrottleLimit param); manager and license calls now run 
                         concurrently per tenant.
@@ -324,7 +351,10 @@ Function Get-EntraIDMultiTenantUserReport {
 
         [Parameter(Mandatory = $false, HelpMessage = "Maximum number of users to process in parallel. Default is 10.")]
         [ValidateRange(1, 20)]
-        [int] $ThrottleLimit = 10
+        [int] $ThrottleLimit = 10,
+
+        [Parameter(Mandatory = $false, HelpMessage = "When present, generates an HTML dashboard report alongside the CSV export.")]
+        [switch] $GenerateHtmlReport
     )
 
 
@@ -598,6 +628,1071 @@ Function Get-EntraIDMultiTenantUserReport {
 
 
     #─────────────────────────────────────────────────────────────────────────────
+    # REGION: HTML Helper
+    # Escapes a PowerShell string for safe embedding inside a JavaScript string
+    # literal. Called once per field, per user, when building the JSON data blob
+    # for the HTML dashboard. Never used in the CSV path.
+    #─────────────────────────────────────────────────────────────────────────────
+
+    Function ConvertTo-HtmlJsonSafe
+    {
+        param ([string] $Text)
+
+        $Text `
+            -replace '\\',      '\\\\'   `
+            -replace '"',       '\"'     `
+            -replace "`r`n",    '\n'     `
+            -replace "`n",      '\n'     `
+            -replace "`r",      '\n'     `
+            -replace "`t",      '\t'     `
+            -replace '<',       '\u003c' `
+            -replace '>',       '\u003e' `
+            -replace '\$',      '\u0024'
+    }
+
+    Function Export-EntraIDHtmlReport
+    {
+        param
+        (
+            [Parameter(Mandatory = $true)]
+            [System.Collections.ArrayList] $UserRecords,
+
+            [Parameter(Mandatory = $true)]
+            [string[]] $TenantIdList,
+
+            [Parameter(Mandatory = $true)]
+            [string] $OutputPath
+        )
+
+        #─────────────────────────────────────────────────────────────────────────
+        # STEP 1 — Pre-compute all metrics PowerShell-side.
+        # Rule: compute everything here; substitute into the here-string via
+        # -replace tokens. Never do logic inside the here-string itself.
+        #─────────────────────────────────────────────────────────────────────────
+
+        $generatedAt  = (Get-Date).ToString('dddd, dd MMMM yyyy  HH:mm:ss')
+        $totalUsers   = $UserRecords.Count
+        $totalTenants = $TenantIdList.Count
+
+        # ── Stat card metrics ──────────────────────────────────────────────────
+
+        $cntEnabled         = ($UserRecords | Where-Object { $_.'Account Enabled' -eq $true  }).Count
+        $cntDisabled        = ($UserRecords | Where-Object { $_.'Account Enabled' -eq $false }).Count
+        $cntLicensed        = ($UserRecords | Where-Object { $_.'Is Licence Assigned' -eq 'Yes' }).Count
+        $cntUnlicensed      = ($UserRecords | Where-Object { $_.'Is Licence Assigned' -eq 'No'  }).Count
+        $cntGuest           = ($UserRecords | Where-Object { $_.'User Type' -eq 'Guest' }).Count
+        $cntSynced          = ($UserRecords | Where-Object { $_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True' }).Count
+
+        # ── Sign-in inactivity buckets (days since last successful sign-in) ────
+        # Users with no sign-in date at all are treated as "Never Signed In"
+
+        $now = Get-Date
+
+        $cntNeverSignedIn   = ($UserRecords | Where-Object { [string]::IsNullOrEmpty($_.'Last Successful Sign-In') }).Count
+        $cntInactive90      = ($UserRecords | Where-Object {
+            -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
+            ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -gt 90
+        }).Count
+        $cntInactive30      = ($UserRecords | Where-Object {
+            -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
+            ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -gt 30 -and
+            ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -le 90
+        }).Count
+        $cntActiveRecent    = ($UserRecords | Where-Object {
+            -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
+            ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -le 30
+        }).Count
+
+        # ── Risk / governance exception counts ────────────────────────────────
+
+        $cntNoManager       = ($UserRecords | Where-Object {
+            $_.'Account Enabled' -eq $true -and [string]::IsNullOrEmpty($_.'Manager UPN')
+        }).Count
+        $cntLicensedDisabled = ($UserRecords | Where-Object {
+            $_.'Account Enabled' -eq $false -and $_.'Is Licence Assigned' -eq 'Yes'
+        }).Count
+        $cntStaleLicensed   = ($UserRecords | Where-Object {
+            $_.'Is Licence Assigned' -eq 'Yes' -and
+            -not [string]::IsNullOrEmpty($_.'Last Successful Sign-In') -and
+            ($now - [datetime]$_.'Last Successful Sign-In').TotalDays -gt 90
+        }).Count
+
+        # ── Data quality counts ────────────────────────────────────────────────
+
+        $cntNoEmail         = ($UserRecords | Where-Object {
+            $_.'User Type' -ne 'Guest' -and [string]::IsNullOrEmpty($_.'Email')
+        }).Count
+        $cntNoDept          = ($UserRecords | Where-Object {
+            $_.'User Type' -ne 'Guest' -and [string]::IsNullOrEmpty($_.'Department')
+        }).Count
+        $cntNoDisplayName   = ($UserRecords | Where-Object {
+            [string]::IsNullOrEmpty($_.'Display Name')
+        }).Count
+
+        #─────────────────────────────────────────────────────────────────────────
+        # STEP 2 — Build per-tenant summary JSON for the Tenant Overview tab.
+        # One JSON object per tenant: name, domain, counts.
+        #─────────────────────────────────────────────────────────────────────────
+
+        $tenantSummaryJson = ($UserRecords |
+            Group-Object 'Tenant ID' |
+            ForEach-Object {
+                $grp     = $_.Group
+                $tName   = ConvertTo-HtmlJsonSafe ($grp[0].'Tenant Name'          ?? '')
+                $tDomain = ConvertTo-HtmlJsonSafe ($grp[0].'Tenant Primary Domain' ?? '')
+                $tId     = ConvertTo-HtmlJsonSafe ($_.Name ?? '')
+                $tTotal  = $grp.Count
+                $tEn     = ($grp | Where-Object { $_.'Account Enabled' -eq $true  }).Count
+                $tDis    = ($grp | Where-Object { $_.'Account Enabled' -eq $false }).Count
+                $tLic    = ($grp | Where-Object { $_.'Is Licence Assigned' -eq 'Yes' }).Count
+                $tGuest  = ($grp | Where-Object { $_.'User Type' -eq 'Guest' }).Count
+                $tSynced = ($grp | Where-Object { $_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True' }).Count
+                "{`"id`":`"$tId`",`"name`":`"$tName`",`"domain`":`"$tDomain`",`"total`":$tTotal,`"enabled`":$tEn,`"disabled`":$tDis,`"licensed`":$tLic,`"guest`":$tGuest,`"synced`":$tSynced}"
+            }
+        ) -join ','
+
+        #─────────────────────────────────────────────────────────────────────────
+        # STEP 3 — Build the per-user JSON array for the User Governance tab.
+        # Fields map directly to the CSV columns. All string fields are run
+        # through ConvertTo-HtmlJsonSafe before embedding.
+        #─────────────────────────────────────────────────────────────────────────
+
+        $usersJson = ($UserRecords | ForEach-Object {
+            $upn        = ConvertTo-HtmlJsonSafe ($_.'Login Name'          ?? '')
+            $display    = ConvertTo-HtmlJsonSafe ($_.'Display Name'        ?? '')
+            $email      = ConvertTo-HtmlJsonSafe ($_.'Email'               ?? '')
+            $dept       = ConvertTo-HtmlJsonSafe ($_.'Department'          ?? '')
+            $userType   = ConvertTo-HtmlJsonSafe ($_.'User Type'           ?? '')
+            $mgrDisplay = ConvertTo-HtmlJsonSafe ($_.'Manager Display Name'?? '')
+            $mgrUpn     = ConvertTo-HtmlJsonSafe ($_.'Manager UPN'         ?? '')
+            $tenantName = ConvertTo-HtmlJsonSafe ($_.'Tenant Name'         ?? '')
+            $tenantDom  = ConvertTo-HtmlJsonSafe ($_.'Tenant Primary Domain'?? '')
+            $licenses   = ConvertTo-HtmlJsonSafe ($_.'Assigned Licences'   ?? '')
+            $lastSignIn = ConvertTo-HtmlJsonSafe ($_.'Last Successful Sign-In' ?? '')
+            $created    = ConvertTo-HtmlJsonSafe ($_.'Created Date'        ?? '')
+            $enabled    = if ($_.'Account Enabled' -eq $true)  { 'true' } else { 'false' }
+            $licensed   = if ($_.'Is Licence Assigned' -eq 'Yes') { 'true' } else { 'false' }
+            $synced     = if ($_.'Is Synced From On-Premises' -eq $true -or $_.'Is Synced From On-Premises' -eq 'True') { 'true' } else { 'false' }
+
+            "{`"upn`":`"$upn`",`"display`":`"$display`",`"email`":`"$email`",`"dept`":`"$dept`",`"type`":`"$userType`",`"enabled`":$enabled,`"licensed`":$licensed,`"synced`":$synced,`"mgrDisplay`":`"$mgrDisplay`",`"mgrUpn`":`"$mgrUpn`",`"tenant`":`"$tenantName`",`"tenantDom`":`"$tenantDom`",`"licenses`":`"$licenses`",`"lastSignIn`":`"$lastSignIn`",`"created`":`"$created`"}"
+        }) -join ','
+
+        #─────────────────────────────────────────────────────────────────────────
+        # STEP 4 — Build the HTML here-string with __TOKEN__ placeholders.
+        # The single-quoted @'...'@ means NO PowerShell interpolation happens
+        # inside this block. All values are injected via -replace at the end.
+        # CSS variables, JS template literals, and $ signs are all safe.
+        #─────────────────────────────────────────────────────────────────────────
+
+        $html = @'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Entra ID — Multi-Tenant User Report</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg:#0d1117; --surface:#161b22; --surface2:#1c2333; --surface3:#243048;
+  --border:#30363d; --accent:#388bfd; --accent2:#39c5cf; --accent3:#a371f7;
+  --green:#3fb950; --amber:#d29922; --red:#f85149;
+  --text:#e6edf3; --muted:#7d8590; --muted2:#adbac7;
+  --mono:'JetBrains Mono','Consolas','Courier New',monospace;
+  --sans:'Calibri','Segoe UI',Tahoma,Geneva,sans-serif;
+  --radius:10px; --radius-sm:6px; --shadow:0 4px 24px rgba(0,0,0,.5);
+}
+body.light-theme {
+  --bg:#f6f8fa; --surface:#fff; --surface2:#f0f3f6; --surface3:#e4e9ef;
+  --border:#d0d7de; --accent:#0969da; --accent2:#0284a8; --accent3:#7c3aed;
+  --green:#1a7f37; --amber:#b08000; --red:#cf222e;
+  --text:#1f2328; --muted:#636c76; --muted2:#424a53;
+  --shadow:0 4px 24px rgba(0,0,0,.12);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.6;min-height:100vh;overflow-x:hidden;transition:background .25s,color .25s}
+
+/* ── Sidebar ── */
+#sidebar{position:fixed;top:0;left:0;bottom:0;width:240px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100;transition:background .25s,border-color .25s}
+.sidebar-logo{padding:20px 18px 14px;border-bottom:1px solid var(--border)}
+.logo-icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent3));border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:9px}
+.sidebar-logo h1{font-size:14px;font-weight:700;color:var(--text)}
+.sidebar-logo p{font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.version-badge{display:inline-block;margin-top:5px;background:rgba(56,139,253,.15);color:var(--accent);font-family:var(--mono);font-size:10px;padding:1px 8px;border-radius:20px;border:1px solid rgba(56,139,253,.3)}
+.sidebar-nav{flex:1;padding:8px 0;overflow-y:auto}
+.nav-section-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:8px 18px 4px}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:9px 18px;background:none;border:none;cursor:pointer;color:var(--muted2);font-family:var(--sans);font-size:13px;text-align:left;position:relative;transition:all .18s}
+.nav-btn .nav-icon{font-size:14px;width:20px;text-align:center;flex-shrink:0}
+.nav-btn:hover{color:var(--text);background:var(--surface2)}
+.nav-btn.active{color:var(--accent);background:rgba(56,139,253,.1)}
+.nav-btn.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);border-radius:0 2px 2px 0}
+.theme-toggle-wrap{padding:10px 14px;border-top:1px solid var(--border)}
+.theme-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;color:var(--muted2);font-family:var(--sans);font-size:13px;transition:all .2s}
+.theme-toggle:hover{border-color:var(--accent);color:var(--text)}
+.toggle-pill{width:34px;height:18px;background:var(--surface3);border-radius:9px;position:relative;transition:background .2s;flex-shrink:0}
+.toggle-pill::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted2);transition:transform .2s,background .2s}
+body.light-theme .toggle-pill{background:var(--accent)}
+body.light-theme .toggle-pill::after{transform:translateX(16px);background:#fff}
+.sidebar-footer{padding:10px 18px 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);font-family:var(--mono);line-height:1.6}
+kbd{display:inline-block;padding:1px 5px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+/* ── Main ── */
+#main{margin-left:240px;min-height:100vh}
+.page{display:none;padding:28px 32px;animation:fadeIn .22s ease}
+.page.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.page-header{margin-bottom:22px;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.page-title{font-size:22px;font-weight:700;color:var(--text)}
+.page-subtitle{color:var(--muted);font-size:13px;margin-top:3px}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--sans);cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted2);transition:all .2s;white-space:nowrap}
+.btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(56,139,253,.08)}
+.btn-group{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ── Stat cards ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:22px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px 17px;position:relative;overflow:hidden;transition:transform .2s,border-color .2s;cursor:default}
+.stat-card:hover{transform:translateY(-2px);border-color:var(--accent)}
+.stat-icon{font-size:20px;margin-bottom:8px}
+.stat-value{font-size:26px;font-weight:700;color:var(--text);line-height:1}
+.stat-label{color:var(--muted);font-size:12px;margin-top:4px}
+.stat-card.c-blue{border-top:2px solid var(--accent)}
+.stat-card.c-cyan{border-top:2px solid var(--accent2)}
+.stat-card.c-purple{border-top:2px solid var(--accent3)}
+.stat-card.c-green{border-top:2px solid var(--green)}
+.stat-card.c-amber{border-top:2px solid var(--amber)}
+.stat-card.c-red{border-top:2px solid var(--red)}
+
+/* ── Panels ── */
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:22px}
+@media(max-width:900px){.chart-grid{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:18px}
+.section-title{font-size:14px;font-weight:700;margin-bottom:14px;color:var(--text);display:flex;align-items:center;gap:7px}
+
+/* ── Bar rows (used in charts) ── */
+.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.bar-label{font-family:var(--mono);font-size:11px;color:var(--muted2);width:100px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-track{flex:1;height:8px;background:var(--surface3);border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width 1s cubic-bezier(.4,0,.2,1)}
+.bar-count{font-family:var(--mono);font-size:11px;color:var(--accent2);width:40px;text-align:right;flex-shrink:0}
+
+/* ── Donut chart ── */
+#donutWrap{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.legend-list{flex:1;min-width:130px;display:flex;flex-direction:column;gap:5px}
+.legend-item{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted2);padding:2px 4px;border-radius:4px}
+.legend-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.legend-pct{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+/* ── Tenant cards ── */
+.tenant-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:22px}
+.tenant-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:border-color .2s,transform .15s}
+.tenant-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.tenant-card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.tenant-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),var(--accent3));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.tenant-name{font-size:13.5px;font-weight:700;color:var(--text)}
+.tenant-domain{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px}
+.tenant-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tenant-stat{background:var(--surface2);border-radius:var(--radius-sm);padding:8px 10px}
+.tenant-stat-val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--text)}
+.tenant-stat-lbl{font-size:11px;color:var(--muted);margin-top:1px}
+
+/* ── Data table ── */
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.search-wrap{flex:1;min-width:200px;position:relative}
+.search-wrap .icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:13px;pointer-events:none}
+input[type=text],select{background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-family:var(--sans);font-size:13px;padding:7px 10px;outline:none;transition:border-color .2s}
+input[type=text]{padding-left:34px;width:100%}
+input[type=text]:focus,select:focus{border-color:var(--accent)}
+select{cursor:pointer}
+select option{background:var(--surface2)}
+.result-count{color:var(--muted);font-size:12px;flex-shrink:0}
+.page-size-wrap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.users-table{width:100%;border-collapse:collapse}
+.users-table thead th{text-align:left;font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:9px 12px;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
+.users-table thead th:hover{color:var(--text)}
+.users-table thead th.sort-active{color:var(--accent)}
+.sort-arrow{margin-left:4px;opacity:.4;font-size:10px}
+.sort-active .sort-arrow{opacity:1}
+.users-table tbody tr{border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s}
+.users-table tbody tr:hover{background:var(--surface2)}
+.users-table tbody td{padding:8px 12px;vertical-align:middle;font-size:13px}
+.td-mono{font-family:var(--mono);font-size:12px}
+.td-muted{color:var(--muted2);font-size:12px}
+.status-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.pill-green{background:rgba(63,185,80,.12);color:var(--green);border:1px solid rgba(63,185,80,.3)}
+.pill-red{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.3)}
+.pill-amber{background:rgba(210,153,34,.12);color:var(--amber);border:1px solid rgba(210,153,34,.3)}
+.pill-blue{background:rgba(56,139,253,.12);color:var(--accent);border:1px solid rgba(56,139,253,.3)}
+.pill-muted{background:var(--surface2);color:var(--muted);border:1px solid var(--border)}
+.pagination{display:flex;gap:5px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:12px}
+.page-btn{background:var(--surface);border:1px solid var(--border);color:var(--muted2);font-family:var(--mono);font-size:12px;padding:5px 10px;border-radius:var(--radius-sm);cursor:pointer;transition:all .2s}
+.page-btn:hover{border-color:var(--accent);color:var(--accent)}
+.page-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.page-btn:disabled{opacity:.35;cursor:default}
+
+/* ── Risk item rows ── */
+.risk-list{display:flex;flex-direction:column;gap:10px}
+.risk-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 16px;display:flex;align-items:center;gap:14px;transition:border-color .15s}
+.risk-row:hover{border-color:var(--amber)}
+.risk-icon{font-size:20px;flex-shrink:0;width:28px;text-align:center}
+.risk-title{font-size:13.5px;font-weight:600;color:var(--text)}
+.risk-desc{font-size:12px;color:var(--muted2);margin-top:2px}
+.risk-count{margin-left:auto;font-family:var(--mono);font-size:16px;font-weight:700;flex-shrink:0}
+.risk-count.danger{color:var(--red)}
+.risk-count.warn{color:var(--amber)}
+.risk-count.ok{color:var(--green)}
+
+/* ── Data quality rows ── */
+.dq-list{display:flex;flex-direction:column;gap:8px}
+.dq-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;display:flex;align-items:center;gap:12px}
+.dq-label{flex:1;font-size:13px;color:var(--muted2)}
+.dq-val{font-family:var(--mono);font-size:14px;font-weight:700}
+.dq-track{width:120px;height:6px;background:var(--surface3);border-radius:3px;overflow:hidden;flex-shrink:0}
+.dq-fill{height:100%;border-radius:3px;transition:width 1s ease}
+
+/* ── Toast ── */
+#toast{position:fixed;bottom:22px;right:22px;z-index:9999;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;font-size:13px;color:var(--text);box-shadow:var(--shadow);display:flex;align-items:center;gap:8px;transform:translateY(80px);opacity:0;transition:transform .3s ease,opacity .3s ease;pointer-events:none}
+#toast.show{transform:translateY(0);opacity:1}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+
+/* ── Responsive ── */
+@media(max-width:768px){#sidebar{transform:translateX(-240px);transition:transform .3s}#sidebar.open{transform:translateX(0)}#main{margin-left:0}.page{padding:18px}#menuToggle{display:flex}}
+#menuToggle{display:none;position:fixed;top:12px;left:12px;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 10px;cursor:pointer;color:var(--text)}
+</style>
+</head>
+<body>
+
+<button id="menuToggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">👥</div>
+    <h1>Entra ID User Report</h1>
+    <p>Multi-Tenant Identity Dashboard</p>
+    <span class="version-badge">v1.2</span>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-section-label">Navigation</div>
+    <button class="nav-btn active" onclick="showPage('exec',this)">
+      <span class="nav-icon">📊</span> Executive Overview
+    </button>
+    <button class="nav-btn" onclick="showPage('tenants',this)">
+      <span class="nav-icon">🏢</span> Tenant Overview
+    </button>
+    <button class="nav-btn" onclick="showPage('governance',this)">
+      <span class="nav-icon">👤</span> User Governance
+    </button>
+    <button class="nav-btn" onclick="showPage('signin',this)">
+      <span class="nav-icon">🔑</span> Sign-In &amp; Inactivity
+    </button>
+    <button class="nav-btn" onclick="showPage('license',this)">
+      <span class="nav-icon">🪪</span> License &amp; Identity
+    </button>
+    <button class="nav-btn" onclick="showPage('risk',this)">
+      <span class="nav-icon">⚠️</span> Governance &amp; Risk
+    </button>
+    <button class="nav-btn" onclick="showPage('dq',this)">
+      <span class="nav-icon">🔎</span> Data Quality
+    </button>
+  </div>
+  <div class="theme-toggle-wrap">
+    <button class="theme-toggle" onclick="toggleTheme()">
+      <span id="themeIcon">🌙</span>
+      <span id="themeLabel" style="flex:1;text-align:left">Dark Mode</span>
+      <span class="toggle-pill"></span>
+    </button>
+  </div>
+  <div class="sidebar-footer">
+    Generated<br>__GENERATEDAT__<br>
+    <span style="color:var(--accent2)">⌨</span> <kbd>/</kbd> search &nbsp; <kbd>Esc</kbd> close
+  </div>
+</nav>
+
+<main id="main">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 1 — Executive Overview                           -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-exec" class="page active">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Executive Overview</div>
+      <div class="page-subtitle">Identity posture across __TOTALTENANTS__ tenant(s) · __TOTALUSERS__ users · Generated __GENERATEDAT__</div>
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card c-blue">   <div class="stat-icon">👥</div><div class="stat-value">__TOTALUSERS__</div>  <div class="stat-label">Total Users</div></div>
+    <div class="stat-card c-green">  <div class="stat-icon">✅</div><div class="stat-value">__CNTENABLED__</div>  <div class="stat-label">Enabled</div></div>
+    <div class="stat-card c-red">    <div class="stat-icon">🚫</div><div class="stat-value">__CNTDISABLED__</div> <div class="stat-label">Disabled</div></div>
+    <div class="stat-card c-cyan">   <div class="stat-icon">🪪</div><div class="stat-value">__CNTLICENSED__</div> <div class="stat-label">Licensed</div></div>
+    <div class="stat-card c-amber">  <div class="stat-icon">📭</div><div class="stat-value">__CNTUNLICENSED__</div><div class="stat-label">Unlicensed</div></div>
+    <div class="stat-card c-purple"> <div class="stat-icon">🌐</div><div class="stat-value">__CNTGUEST__</div>   <div class="stat-label">Guest Users</div></div>
+    <div class="stat-card c-blue">   <div class="stat-icon">🔗</div><div class="stat-value">__CNTSYNCED__</div>  <div class="stat-label">Synced On-Prem</div></div>
+    <div class="stat-card c-red">    <div class="stat-icon">👻</div><div class="stat-value">__CNTNEVER__</div>   <div class="stat-label">Never Signed In</div></div>
+    <div class="stat-card c-amber">  <div class="stat-icon">⏳</div><div class="stat-value">__CNTINACTIVE90__</div><div class="stat-label">Inactive &gt;90 Days</div></div>
+    <div class="stat-card c-cyan">   <div class="stat-icon">🏢</div><div class="stat-value">__TOTALTENANTS__</div><div class="stat-label">Total Tenants</div></div>
+  </div>
+
+  <div class="chart-grid">
+    <div class="panel">
+      <div class="section-title">📊 Account Status</div>
+      <div id="execStatusBars"></div>
+    </div>
+    <div class="panel">
+      <div class="section-title">🪪 Licence Coverage</div>
+      <div id="execLicBars"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">🔑 Sign-In Activity Summary</div>
+    <div id="execSignInBars"></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 2 — Tenant Overview                             -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-tenants" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Tenant Overview</div>
+      <div class="page-subtitle">Per-tenant user and governance breakdown</div>
+    </div>
+  </div>
+  <div class="tenant-grid" id="tenantCards"></div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 3 — User Governance                             -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-governance" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">User Governance</div>
+      <div class="page-subtitle">Full user inventory — search, filter, sort</div>
+    </div>
+    <div class="btn-group">
+      <button class="btn" onclick="exportUsersCSV()">⬇ Export CSV</button>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="icon">🔎</span>
+      <input type="text" id="userSearch" placeholder="Search name, UPN, email, department… (press / to focus)" oninput="filterUsers()"/>
+    </div>
+    <select id="filterTenant"  onchange="filterUsers()"><option value="">All Tenants</option></select>
+    <select id="filterStatus"  onchange="filterUsers()">
+      <option value="">All Status</option>
+      <option value="enabled">Enabled</option>
+      <option value="disabled">Disabled</option>
+    </select>
+    <select id="filterType"    onchange="filterUsers()">
+      <option value="">All Types</option>
+      <option value="Member">Member</option>
+      <option value="Guest">Guest</option>
+    </select>
+    <select id="filterLicense" onchange="filterUsers()">
+      <option value="">All Licence</option>
+      <option value="licensed">Licensed</option>
+      <option value="unlicensed">Unlicensed</option>
+    </select>
+    <div class="page-size-wrap">
+      Show <select id="govPageSize" onchange="changeGovPageSize()">
+        <option>25</option><option>50</option><option>100</option>
+      </select>
+    </div>
+    <span class="result-count" id="userResultCount"></span>
+  </div>
+  <table class="users-table">
+    <thead><tr>
+      <th onclick="sortUsers('display')" id="uth-display">Display Name <span class="sort-arrow">↕</span></th>
+      <th onclick="sortUsers('upn')"     id="uth-upn">UPN <span class="sort-arrow">↕</span></th>
+      <th onclick="sortUsers('dept')"    id="uth-dept">Department <span class="sort-arrow">↕</span></th>
+      <th onclick="sortUsers('tenant')"  id="uth-tenant">Tenant <span class="sort-arrow">↕</span></th>
+      <th>Status</th>
+      <th>Type</th>
+      <th>Licence</th>
+      <th onclick="sortUsers('lastSignIn')" id="uth-lastSignIn">Last Sign-In <span class="sort-arrow">↕</span></th>
+    </tr></thead>
+    <tbody id="usersTableBody"></tbody>
+  </table>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:8px">
+    <span id="govPageInfo" style="font-size:12px;color:var(--muted)"></span>
+    <div class="pagination" id="govPagination"></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 4 — Sign-In & Inactivity                        -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-signin" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Sign-In &amp; Inactivity</div>
+      <div class="page-subtitle">Inactive, stale, and never-signed-in users</div>
+    </div>
+  </div>
+  <div class="chart-grid">
+    <div class="panel">
+      <div class="section-title">🔑 Sign-In Status Distribution</div>
+      <div id="signinDistBars"></div>
+    </div>
+    <div class="panel">
+      <div class="section-title">⏳ Inactivity Risk Levels</div>
+      <div id="signinRiskBars"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="section-title">👻 Never Signed In — Enabled Accounts</div>
+    <div id="neverSignedInList" style="max-height:340px;overflow-y:auto"></div>
+  </div>
+  <div class="panel">
+    <div class="section-title">⏳ Inactive &gt;90 Days — Enabled &amp; Licensed</div>
+    <div id="staleLicensedList" style="max-height:340px;overflow-y:auto"></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 5 — License & Identity Usage                    -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-license" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">License &amp; Identity Usage</div>
+      <div class="page-subtitle">Licence assignment, identity type, and sync coverage</div>
+    </div>
+  </div>
+  <div class="chart-grid">
+    <div class="panel">
+      <div class="section-title">🪪 Licence Assignment</div>
+      <div id="licAssignBars"></div>
+    </div>
+    <div class="panel">
+      <div class="section-title">🌐 User Type Breakdown</div>
+      <div id="userTypeBars"></div>
+    </div>
+  </div>
+  <div class="chart-grid">
+    <div class="panel">
+      <div class="section-title">🔗 On-Premises Sync Coverage</div>
+      <div id="syncBars"></div>
+    </div>
+    <div class="panel">
+      <div class="section-title">📋 Top Assigned Licence SKUs</div>
+      <div id="topSkuBars"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 6 — Governance & Risk                           -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-risk" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Governance &amp; Risk</div>
+      <div class="page-subtitle">Actionable identity governance exceptions</div>
+    </div>
+  </div>
+  <div class="risk-list" id="riskList"></div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- TAB 7 — Data Quality                                -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="page-dq" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Data Quality</div>
+      <div class="page-subtitle">Missing attributes and data completeness</div>
+    </div>
+  </div>
+  <div class="dq-list" id="dqList"></div>
+</section>
+
+</main>
+
+<!-- ── Toast notification ── -->
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── Data blobs injected by PowerShell ──────────────────────────────────────
+const USERS   = [__USERS_JSON__];
+const TENANTS = [__TENANTS_JSON__];
+
+// ── Escape helpers (mandatory for any user-derived string in innerHTML) ────
+function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function escJ(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+
+// ── Navigation ─────────────────────────────────────────────────────────────
+function showPage(id, btnEl) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  if (btnEl) btnEl.classList.add('active');
+}
+
+// ── Theme toggle ───────────────────────────────────────────────────────────
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light-theme');
+  document.getElementById('themeIcon').textContent  = isLight ? '☀️' : '🌙';
+  document.getElementById('themeLabel').textContent = isLight ? 'Light Mode' : 'Dark Mode';
+  localStorage.setItem('entraid-theme', isLight ? 'light' : 'dark');
+}
+(function() {
+  if (localStorage.getItem('entraid-theme') === 'light') {
+    document.body.classList.add('light-theme');
+    document.getElementById('themeIcon').textContent  = '☀️';
+    document.getElementById('themeLabel').textContent = 'Light Mode';
+  }
+})();
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function showToast(msg, icon) {
+  const t = document.getElementById('toast');
+  t.innerHTML = (icon || '✅') + ' ' + escH(msg);
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ── Bar chart helper ───────────────────────────────────────────────────────
+// Renders an array of {label, count, color} into a container as animated bars.
+function renderBars(containerId, rows, maxVal) {
+  const el  = document.getElementById(containerId);
+  const max = maxVal || Math.max(...rows.map(r => r.count), 1);
+  el.innerHTML = rows.map(r => {
+    const pct = Math.round((r.count / max) * 100);
+    return `<div class="bar-row">
+      <span class="bar-label" title="${escH(r.label)}">${escH(r.label)}</span>
+      <div class="bar-track"><div class="bar-fill" style="background:${r.color};width:0%" data-pct="${pct}"></div></div>
+      <span class="bar-count">${r.count}</span>
+    </div>`;
+  }).join('');
+  requestAnimationFrame(() => {
+    el.querySelectorAll('.bar-fill').forEach(el => { el.style.width = el.dataset.pct + '%'; });
+  });
+}
+
+// ── TAB 1: Executive Overview charts ──────────────────────────────────────
+(function buildExecCharts() {
+  const enabled   = USERS.filter(u => u.enabled).length;
+  const disabled  = USERS.length - enabled;
+  const licensed  = USERS.filter(u => u.licensed).length;
+  const unlicensed= USERS.length - licensed;
+  const guest     = USERS.filter(u => u.type === 'Guest').length;
+  const member    = USERS.length - guest;
+  const now       = new Date();
+
+  function daysSince(ds) {
+    if (!ds) return null;
+    return (now - new Date(ds)) / 86400000;
+  }
+  const never   = USERS.filter(u => !u.lastSignIn).length;
+  const gt90    = USERS.filter(u => { const d = daysSince(u.lastSignIn); return d !== null && d > 90; }).length;
+  const d30to90 = USERS.filter(u => { const d = daysSince(u.lastSignIn); return d !== null && d > 30 && d <= 90; }).length;
+  const active  = USERS.filter(u => { const d = daysSince(u.lastSignIn); return d !== null && d <= 30; }).length;
+
+  renderBars('execStatusBars', [
+    { label: 'Enabled',  count: enabled,  color: 'var(--green)' },
+    { label: 'Disabled', count: disabled, color: 'var(--red)'   }
+  ]);
+
+  renderBars('execLicBars', [
+    { label: 'Licensed',   count: licensed,   color: 'var(--accent)'  },
+    { label: 'Unlicensed', count: unlicensed, color: 'var(--muted)'   },
+    { label: 'Guest',      count: guest,      color: 'var(--accent3)' },
+    { label: 'Member',     count: member,     color: 'var(--accent2)' }
+  ]);
+
+  renderBars('execSignInBars', [
+    { label: 'Active ≤30 days',   count: active,  color: 'var(--green)' },
+    { label: 'Inactive 31-90d',   count: d30to90, color: 'var(--amber)' },
+    { label: 'Inactive >90 days', count: gt90,    color: 'var(--red)'   },
+    { label: 'Never Signed In',   count: never,   color: 'var(--muted)' }
+  ]);
+})();
+
+// ── TAB 2: Tenant cards ────────────────────────────────────────────────────
+(function buildTenantCards() {
+  const el = document.getElementById('tenantCards');
+  if (!TENANTS.length) {
+    el.innerHTML = '<p style="color:var(--muted)">No tenant data available.</p>';
+    return;
+  }
+  el.innerHTML = TENANTS.map(t => `
+    <div class="tenant-card">
+      <div class="tenant-card-head">
+        <div class="tenant-icon">🏢</div>
+        <div>
+          <div class="tenant-name">${escH(t.name || t.id)}</div>
+          <div class="tenant-domain">${escH(t.domain || t.id)}</div>
+        </div>
+      </div>
+      <div class="tenant-stats">
+        <div class="tenant-stat"><div class="tenant-stat-val">${t.total}</div>    <div class="tenant-stat-lbl">Total Users</div></div>
+        <div class="tenant-stat"><div class="tenant-stat-val" style="color:var(--green)">${t.enabled}</div>  <div class="tenant-stat-lbl">Enabled</div></div>
+        <div class="tenant-stat"><div class="tenant-stat-val" style="color:var(--red)">${t.disabled}</div>  <div class="tenant-stat-lbl">Disabled</div></div>
+        <div class="tenant-stat"><div class="tenant-stat-val" style="color:var(--accent)">${t.licensed}</div> <div class="tenant-stat-lbl">Licensed</div></div>
+        <div class="tenant-stat"><div class="tenant-stat-val" style="color:var(--accent3)">${t.guest}</div>   <div class="tenant-stat-lbl">Guests</div></div>
+        <div class="tenant-stat"><div class="tenant-stat-val" style="color:var(--accent2)">${t.synced}</div>  <div class="tenant-stat-lbl">Synced</div></div>
+      </div>
+    </div>`).join('');
+})();
+
+// ── TAB 3: User Governance table ───────────────────────────────────────────
+let filteredUsers = [...USERS];
+let govPage = 1;
+let govPageSize = 25;
+let govSortCol = 'display';
+let govSortAsc = true;
+
+(function initGovFilters() {
+  const sel = document.getElementById('filterTenant');
+  const tenants = [...new Set(USERS.map(u => u.tenant).filter(Boolean))].sort();
+  tenants.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t;
+    sel.appendChild(o);
+  });
+  filterUsers();
+})();
+
+function filterUsers() {
+  const q   = document.getElementById('userSearch').value.toLowerCase().trim();
+  const ten = document.getElementById('filterTenant').value;
+  const st  = document.getElementById('filterStatus').value;
+  const typ = document.getElementById('filterType').value;
+  const lic = document.getElementById('filterLicense').value;
+
+  filteredUsers = USERS.filter(u => {
+    const mQ   = !q   || u.display.toLowerCase().includes(q) || u.upn.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.dept.toLowerCase().includes(q);
+    const mTen = !ten || u.tenant === ten;
+    const mSt  = !st  || (st === 'enabled' ? u.enabled : !u.enabled);
+    const mTyp = !typ || u.type === typ;
+    const mLic = !lic || (lic === 'licensed' ? u.licensed : !u.licensed);
+    return mQ && mTen && mSt && mTyp && mLic;
+  });
+
+  const sorts = {
+    display:    (a,b) => a.display.localeCompare(b.display),
+    upn:        (a,b) => a.upn.localeCompare(b.upn),
+    dept:       (a,b) => (a.dept||'').localeCompare(b.dept||''),
+    tenant:     (a,b) => (a.tenant||'').localeCompare(b.tenant||''),
+    lastSignIn: (a,b) => (a.lastSignIn||'').localeCompare(b.lastSignIn||'')
+  };
+  if (sorts[govSortCol]) {
+    filteredUsers.sort(sorts[govSortCol]);
+    if (!govSortAsc) filteredUsers.reverse();
+  }
+
+  govPage = 1;
+  renderUsersTable();
+}
+
+function sortUsers(col) {
+  if (govSortCol === col) { govSortAsc = !govSortAsc; }
+  else { govSortCol = col; govSortAsc = true; }
+  document.querySelectorAll('.users-table thead th').forEach(th => th.classList.remove('sort-active'));
+  const th = document.getElementById('uth-' + col);
+  if (th) th.classList.add('sort-active');
+  filterUsers();
+}
+
+function changeGovPageSize() {
+  govPageSize = parseInt(document.getElementById('govPageSize').value, 10);
+  govPage = 1;
+  renderUsersTable();
+}
+
+function renderUsersTable() {
+  const start = (govPage - 1) * govPageSize;
+  const slice = filteredUsers.slice(start, start + govPageSize);
+
+  document.getElementById('userResultCount').textContent = `${filteredUsers.length} of ${USERS.length}`;
+  document.getElementById('govPageInfo').textContent = `Showing ${start + 1}–${Math.min(start + govPageSize, filteredUsers.length)} of ${filteredUsers.length}`;
+
+  document.getElementById('usersTableBody').innerHTML = slice.map(u => {
+    const statusPill   = u.enabled  ? '<span class="status-pill pill-green">Enabled</span>'   : '<span class="status-pill pill-red">Disabled</span>';
+    const typePill     = u.type === 'Guest' ? '<span class="status-pill pill-amber">Guest</span>' : '<span class="status-pill pill-blue">Member</span>';
+    const licensePill  = u.licensed ? '<span class="status-pill pill-green">Licensed</span>'  : '<span class="status-pill pill-muted">None</span>';
+    const signInLabel  = u.lastSignIn ? escH(u.lastSignIn.substring(0,10)) : '<span style="color:var(--muted)">Never</span>';
+    return `<tr>
+      <td class="td-mono">${escH(u.display)}</td>
+      <td class="td-mono td-muted">${escH(u.upn)}</td>
+      <td class="td-muted">${escH(u.dept||'—')}</td>
+      <td class="td-muted">${escH(u.tenant||'—')}</td>
+      <td>${statusPill}</td>
+      <td>${typePill}</td>
+      <td>${licensePill}</td>
+      <td class="td-mono td-muted">${signInLabel}</td>
+    </tr>`;
+  }).join('');
+
+  renderGovPagination();
+}
+
+function renderGovPagination() {
+  const total = Math.ceil(filteredUsers.length / govPageSize);
+  const el = document.getElementById('govPagination');
+  if (total <= 1) { el.innerHTML = ''; return; }
+  let h = `<button class="page-btn" onclick="govGoPage(${govPage-1})" ${govPage===1?'disabled':''}>‹</button>`;
+  for (let i = 1; i <= total; i++) {
+    if (i === 1 || i === total || Math.abs(i - govPage) <= 1)
+      h += `<button class="page-btn ${i===govPage?'active':''}" onclick="govGoPage(${i})">${i}</button>`;
+    else if (Math.abs(i - govPage) === 2)
+      h += `<span style="color:var(--muted);padding:0 4px">…</span>`;
+  }
+  h += `<button class="page-btn" onclick="govGoPage(${govPage+1})" ${govPage===total?'disabled':''}>›</button>`;
+  el.innerHTML = h;
+}
+
+function govGoPage(p) {
+  const total = Math.ceil(filteredUsers.length / govPageSize);
+  if (p < 1 || p > total) return;
+  govPage = p;
+  renderUsersTable();
+}
+
+// ── TAB 4: Sign-In & Inactivity ────────────────────────────────────────────
+(function buildSignInTab() {
+  const now = new Date();
+  function days(ds) { return ds ? (now - new Date(ds)) / 86400000 : null; }
+
+  const never   = USERS.filter(u => !u.lastSignIn);
+  const gt90    = USERS.filter(u => { const d = days(u.lastSignIn); return d !== null && d > 90; });
+  const d30_90  = USERS.filter(u => { const d = days(u.lastSignIn); return d !== null && d > 30 && d <= 90; });
+  const active  = USERS.filter(u => { const d = days(u.lastSignIn); return d !== null && d <= 30; });
+
+  renderBars('signinDistBars', [
+    { label: 'Active ≤30 days',   count: active.length,  color: 'var(--green)' },
+    { label: 'Inactive 31-90d',   count: d30_90.length,  color: 'var(--amber)' },
+    { label: 'Inactive >90 days', count: gt90.length,    color: 'var(--red)'   },
+    { label: 'Never Signed In',   count: never.length,   color: 'var(--muted)' }
+  ]);
+
+  const neverEnabled  = never.filter(u => u.enabled);
+  const staleLicensed = gt90.filter(u => u.enabled && u.licensed);
+  renderBars('signinRiskBars', [
+    { label: 'Never — Enabled',        count: neverEnabled.length,  color: 'var(--red)'   },
+    { label: '>90d — Enabled+Licensed', count: staleLicensed.length, color: 'var(--amber)' }
+  ]);
+
+  function userRow(u) {
+    return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="font-family:var(--mono);font-size:12px;color:var(--accent2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escH(u.upn)}">${escH(u.display||u.upn)}</span>
+      <span style="font-size:11px;color:var(--muted);flex-shrink:0">${escH(u.tenant||'')}</span>
+    </div>`;
+  }
+
+  const nEL = document.getElementById('neverSignedInList');
+  nEL.innerHTML = neverEnabled.length
+    ? neverEnabled.map(userRow).join('')
+    : '<p style="color:var(--muted);font-size:13px;padding:12px 0">✅ No enabled accounts with a missing sign-in date.</p>';
+
+  const sLL = document.getElementById('staleLicensedList');
+  sLL.innerHTML = staleLicensed.length
+    ? staleLicensed.map(userRow).join('')
+    : '<p style="color:var(--muted);font-size:13px;padding:12px 0">✅ No enabled licensed accounts inactive for more than 90 days.</p>';
+})();
+
+// ── TAB 5: License & Identity Usage ───────────────────────────────────────
+(function buildLicenseTab() {
+  const licensed   = USERS.filter(u => u.licensed).length;
+  const unlicensed = USERS.length - licensed;
+  const guest      = USERS.filter(u => u.type === 'Guest').length;
+  const member     = USERS.length - guest;
+  const synced     = USERS.filter(u => u.synced).length;
+  const cloudOnly  = USERS.length - synced;
+
+  renderBars('licAssignBars', [
+    { label: 'Licensed',   count: licensed,   color: 'var(--accent)' },
+    { label: 'Unlicensed', count: unlicensed, color: 'var(--muted)'  }
+  ]);
+  renderBars('userTypeBars', [
+    { label: 'Member', count: member, color: 'var(--accent2)' },
+    { label: 'Guest',  count: guest,  color: 'var(--accent3)' }
+  ]);
+  renderBars('syncBars', [
+    { label: 'Cloud-Only',    count: cloudOnly, color: 'var(--accent)'  },
+    { label: 'Synced On-Prem', count: synced,   color: 'var(--accent2)' }
+  ]);
+
+  // Top SKUs — split the semicolon-delimited licence strings and count each SKU
+  const skuMap = {};
+  USERS.filter(u => u.licensed && u.licenses).forEach(u => {
+    u.licenses.split(' ; ').forEach(sku => {
+      const s = sku.trim();
+      if (s && s !== '-') skuMap[s] = (skuMap[s] || 0) + 1;
+    });
+  });
+  const topSkus = Object.entries(skuMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const palette = ['var(--accent)','var(--accent2)','var(--accent3)','var(--green)','var(--amber)'];
+  renderBars('topSkuBars', topSkus.map(([sku,cnt],i) => ({
+    label: sku, count: cnt, color: palette[i % palette.length]
+  })));
+})();
+
+// ── TAB 6: Governance & Risk ───────────────────────────────────────────────
+(function buildRiskTab() {
+  const now = new Date();
+  function days(ds) { return ds ? (now - new Date(ds)) / 86400000 : null; }
+
+  const risks = [
+    {
+      icon: '👤',
+      title: 'Enabled accounts with no manager assigned',
+      desc:  'Active users with no manager in directory — review for orphaned accounts.',
+      count: USERS.filter(u => u.enabled && !u.mgrUpn).length,
+      level: 'warn'
+    },
+    {
+      icon: '💸',
+      title: 'Disabled accounts still holding a licence',
+      desc:  'Licences assigned to disabled accounts are wasted spend. Reclaim them.',
+      count: USERS.filter(u => !u.enabled && u.licensed).length,
+      level: 'danger'
+    },
+    {
+      icon: '⏳',
+      title: 'Licensed accounts inactive for >90 days',
+      desc:  'Enabled licensed users who have not signed in for over 90 days.',
+      count: USERS.filter(u => { const d = days(u.lastSignIn); return u.licensed && u.enabled && d !== null && d > 90; }).length,
+      level: 'warn'
+    },
+    {
+      icon: '👻',
+      title: 'Enabled accounts that have never signed in',
+      desc:  'Provisioned but never used — verify if still required.',
+      count: USERS.filter(u => u.enabled && !u.lastSignIn).length,
+      level: 'warn'
+    },
+    {
+      icon: '🌐',
+      title: 'Licensed guest accounts',
+      desc:  'External guests consuming licences — confirm business justification.',
+      count: USERS.filter(u => u.type === 'Guest' && u.licensed).length,
+      level: 'warn'
+    }
+  ];
+
+  document.getElementById('riskList').innerHTML = risks.map(r => {
+    const cls = r.count === 0 ? 'ok' : r.level;
+    return `<div class="risk-row">
+      <div class="risk-icon">${r.icon}</div>
+      <div style="flex:1">
+        <div class="risk-title">${escH(r.title)}</div>
+        <div class="risk-desc">${escH(r.desc)}</div>
+      </div>
+      <div class="risk-count ${cls}">${r.count}</div>
+    </div>`;
+  }).join('');
+})();
+
+// ── TAB 7: Data Quality ────────────────────────────────────────────────────
+(function buildDQTab() {
+  const total = USERS.length || 1;
+  const dqItems = [
+    { label: 'Members missing email address',   count: USERS.filter(u => u.type !== 'Guest' && !u.email).length },
+    { label: 'Users missing department',         count: USERS.filter(u => u.type !== 'Guest' && !u.dept).length  },
+    { label: 'Users missing display name',       count: USERS.filter(u => !u.display).length                     },
+    { label: 'Enabled users missing manager',    count: USERS.filter(u => u.enabled && !u.mgrUpn).length         },
+    { label: 'Licensed users missing sign-in data', count: USERS.filter(u => u.licensed && !u.lastSignIn).length  }
+  ];
+
+  document.getElementById('dqList').innerHTML = dqItems.map(item => {
+    const pct  = Math.round((item.count / total) * 100);
+    const col  = item.count === 0 ? 'var(--green)' : pct > 20 ? 'var(--red)' : 'var(--amber)';
+    return `<div class="dq-row">
+      <div class="dq-label">${escH(item.label)}</div>
+      <div class="dq-track"><div class="dq-fill" style="background:${col};width:0%" data-pct="${pct}"></div></div>
+      <div class="dq-val" style="color:${col}">${item.count}</div>
+    </div>`;
+  }).join('');
+
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.dq-fill').forEach(el => { el.style.width = el.dataset.pct + '%'; });
+  });
+})();
+
+// ── CSV export from User Governance table ──────────────────────────────────
+function exportUsersCSV() {
+  const esc = v => `"${String(v || '').replace(/"/g, '""')}"`;
+  const rows = filteredUsers.map(u => [
+    esc(u.display), esc(u.upn), esc(u.email), esc(u.dept),
+    esc(u.type), u.enabled, u.licensed, u.synced,
+    esc(u.mgrDisplay), esc(u.mgrUpn), esc(u.tenant), esc(u.tenantDom),
+    esc(u.licenses), esc(u.lastSignIn), esc(u.created)
+  ].join(','));
+  const header = 'Display Name,UPN,Email,Department,Type,Enabled,Licensed,Synced,Manager Name,Manager UPN,Tenant,Tenant Domain,Licences,Last Sign-In,Created Date';
+  const blob = new Blob([[header, ...rows].join('\r\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a'); a.href = url; a.download = 'EntraID-UserGovernance.csv'; a.click();
+  URL.revokeObjectURL(url);
+  showToast('Exported ' + filteredUsers.length + ' users as CSV');
+}
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'SELECT') {
+    e.preventDefault();
+    const inp = document.querySelector('.page.active input[type=text]');
+    if (inp) inp.focus();
+  }
+});
+
+</script>
+</body>
+</html>
+'@
+
+        #─────────────────────────────────────────────────────────────────────────
+        # STEP 5 — Substitute all __TOKEN__ placeholders via chained -replace.
+        # Single-quoted here-string means NO interpolation happened above,
+        # so every $ in the HTML/CSS/JS was preserved verbatim.
+        #─────────────────────────────────────────────────────────────────────────
+
+        $html = $html `
+            -replace '__GENERATEDAT__',   $generatedAt  `
+            -replace '__TOTALUSERS__',    $totalUsers   `
+            -replace '__TOTALTENANTS__',  $totalTenants `
+            -replace '__CNTENABLED__',    $cntEnabled   `
+            -replace '__CNTDISABLED__',   $cntDisabled  `
+            -replace '__CNTLICENSED__',   $cntLicensed  `
+            -replace '__CNTUNLICENSED__', $cntUnlicensed `
+            -replace '__CNTGUEST__',      $cntGuest     `
+            -replace '__CNTSYNCED__',     $cntSynced    `
+            -replace '__CNTNEVER__',      $cntNeverSignedIn `
+            -replace '__CNTINACTIVE90__', $cntInactive90 `
+            -replace '__USERS_JSON__',    $usersJson    `
+            -replace '__TENANTS_JSON__',  $tenantSummaryJson
+
+        #─────────────────────────────────────────────────────────────────────────
+        # STEP 6 — Write the file.
+        #─────────────────────────────────────────────────────────────────────────
+
+        Try {
+            $html | Out-File -FilePath $OutputPath -Encoding UTF8 -Force -ErrorAction Stop
+            return $true
+        }
+        Catch {
+            Write-Error "Failed to write HTML report to '$OutputPath'. Details: $_"
+            return $false
+        }
+    }
+
+
+    #─────────────────────────────────────────────────────────────────────────────
     # REGION: Main Execution
     #─────────────────────────────────────────────────────────────────────────────
 
@@ -617,6 +1712,10 @@ Function Get-EntraIDMultiTenantUserReport {
             return
         }
     }
+
+    # ── Derive HTML export path (same folder and base name as CSV, .html extension) ─
+
+    $HtmlExportPath = [System.IO.Path]::ChangeExtension($ExportPath, '.html')
 
     # ── Decode SecureString HERE in the parent function body ──────────────────────
     #
@@ -817,6 +1916,28 @@ Function Get-EntraIDMultiTenantUserReport {
         Write-Error "Details: $_"
     }
 
+    # ── HTML report (only when -GenerateHtmlReport switch is present) ─────────────
+
+    if ($GenerateHtmlReport) {
+
+        Write-Host ""
+        Write-Host "  💡  -GenerateHtmlReport specified — building HTML dashboard..." -ForegroundColor Yellow
+
+        $htmlSuccess = Export-EntraIDHtmlReport `
+            -UserRecords  $allUserRecords `
+            -TenantIdList $TenantIds      `
+            -OutputPath   $HtmlExportPath
+
+        if ($htmlSuccess) {
+            Write-Host "  ✅  HTML dashboard saved!" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "      🌐  File location  : $HtmlExportPath" -ForegroundColor White
+        }
+        else {
+            Write-Host "  ❌  HTML report could not be saved — see error above." -ForegroundColor Red
+        }
+    }
+
     # ── Scrub secret from memory now that all tenants are processed ───────────────
 
     $global:_ctx.ClientSecret = $null
@@ -838,6 +1959,10 @@ Function Get-EntraIDMultiTenantUserReport {
     Write-Host "  ║                                                                          ║" -ForegroundColor Green
     Write-Host ("  ║  🏢  Directories    : {0,-51}║" -f "$($TenantIds.Count) checked")                      -ForegroundColor Green
     Write-Host ("  ║  👥  People found   : {0,-51}║" -f "$($allUserRecords.Count) total (across all directories)") -ForegroundColor Green
+    Write-Host ("  ║  📄  CSV report     : {0,-51}║" -f $ExportPath)                          -ForegroundColor Green
+    if ($GenerateHtmlReport) {
+    Write-Host ("  ║  🌐  HTML report    : {0,-51}║" -f $HtmlExportPath)                      -ForegroundColor Green
+    }
     Write-Host ("  ║  ⚡  Parallel limit : {0,-51}║" -f "$ThrottleLimit users at a time") -ForegroundColor Green
     Write-Host "  ║                                                                          ║" -ForegroundColor Green
     Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Green
