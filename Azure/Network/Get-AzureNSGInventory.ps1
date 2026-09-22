@@ -414,14 +414,14 @@ Function Get-AzureNSGInventory
             continue
         }
 
-        if ($nsgs.Count -eq 0)
+        if (@($nsgs).Count -eq 0)
         {
             Write-Host "    No NSGs found in this subscription." -ForegroundColor DarkYellow
             continue
         }
 
         Write-Host "    Found $($nsgs.Count) NSG(s). Collecting rules and associations..." -ForegroundColor Green
-        $totalNSGs += $nsgs.Count
+        $totalNSGs += @($nsgs).Count
 
         foreach ($nsg in $nsgs)
         {
@@ -582,7 +582,7 @@ Function Get-AzureNSGInventory
             #endregion
         }
 
-        Write-Host "    Completed: $($nsgs.Count) NSGs processed." -ForegroundColor Green
+        Write-Host "    Completed: $(@($nsgs).Count) NSGs processed." -ForegroundColor Green
     }
     #endregion
 
