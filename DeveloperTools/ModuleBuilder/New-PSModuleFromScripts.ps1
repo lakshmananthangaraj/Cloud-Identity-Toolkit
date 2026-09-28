@@ -1,9 +1,9 @@
 <#
 
 Author       : Lakshmanan Thangaraj
-Version      : 1.2
+Version      : 1.3
 Created-On   : 08 July 2026
-Modified-On  : 27 July 2026
+Modified-On  : 28 September 2026
 
 .SYNOPSIS
     Builds a redistributable PowerShell module (.psm1 + .psd1) from a folder of
@@ -29,6 +29,16 @@ Modified-On  : 27 July 2026
     correctly handles files that contain more than one function, or where the
     function name doesn't exactly match the file name. Duplicate function names
     across files are flagged as warnings rather than silently overwritten.
+
+    When -Recurse is used, the original folder structure beneath -SourcePath is
+    preserved under .\Public (e.g. a script at
+    "<SourcePath>\Azure\RBAC\Get-AzureRBACAssignments.ps1" is copied to
+    "Public\Azure\RBAC\Get-AzureRBACAssignments.ps1", not dropped flat into
+    .\Public). This keeps scripts with the same file name but different source
+    subfolders from overwriting one another, and keeps the built module
+    navigable for larger, deeply-nested enterprise repositories. The generated
+    .psm1 loader already dot-sources recursively, so no changes were needed
+    there to support the preserved structure.
 
     SAFETY BEHAVIOR (v1.2):
         - -ModuleName is validated against a safe character set (letters,
@@ -79,7 +89,10 @@ Modified-On  : 27 July 2026
     'PowerShell', 'Module'.
 
 .PARAMETER Recurse
-    If specified, also scans subfolders of -SourcePath for .ps1 files.
+    If specified, also scans subfolders of -SourcePath for .ps1 files. The
+    subfolder structure found beneath -SourcePath is preserved under
+    .\Public in the built module (see .DESCRIPTION and the recursive-build
+    example below) - it is not flattened into a single folder.
 
 .PARAMETER Force
     If specified, deletes and rebuilds an existing module folder of the same name.
@@ -159,10 +172,46 @@ Modified-On  : 27 July 2026
     but contained no discoverable function definitions (e.g. pure script files,
     config files, or files with parse errors).
 
+.EXAMPLE
+    New-PSModuleFromScripts -SourcePath "D:\Github Repository Backup\Cloud-Identity-Toolkit" `
+        -ModuleName "CloudIdentityToolkit" `
+        -Recurse -Verbose
+
+    Recursive build showing the preserved folder structure. Given a source layout
+    such as:
+
+        Source\Azure\RBAC\Get-AzureRBACAssignments.ps1
+        Source\Azure\Network\Get-AzureNSGInventory.ps1
+        Source\Entra-ID\PIM\Get-PrivilegedUsersReport.ps1
+
+    the built module contains:
+
+        CloudIdentityToolkit\Public\Azure\RBAC\Get-AzureRBACAssignments.ps1
+        CloudIdentityToolkit\Public\Azure\Network\Get-AzureNSGInventory.ps1
+        CloudIdentityToolkit\Public\Entra-ID\PIM\Get-PrivilegedUsersReport.ps1
+
+    i.e. each script's position relative to -SourcePath is preserved under
+    .\Public rather than every script being dropped flat into a single
+    .\Public folder. This is what allows two scripts with the same file name
+    in different category folders (e.g. two README-adjacent scripts, or any
+    future naming collision across categories) to coexist in the built module
+    instead of one silently overwriting the other, and it keeps the build
+    navigable for deep, multi-team enterprise repository layouts.
+
+    To verify the structure after a build, run:
+
+        Get-ChildItem -Path "$($result.ModulePath)\Public" -Recurse -Filter '*.ps1' |
+            Select-Object -ExpandProperty FullName
+
+    which should list each script under its original subfolder path beneath
+    .\Public, matching the layout of -SourcePath.
+
 .NOTES
     ─────────────────────────────────────────────────────────────────────────────
     Version History:
     ─────────────────────────────────────────────────────────────────────────────
+    1.3 (28-Sep-2026) - Fixed -Recurse module builds flattening scripts into
+                         Public\; now preserves relative folder structure.
     1.2 (27-Jul-2026) - Security/hardening pass: validated -ModuleName against a
                          safe character set to close a path-traversal risk;
                          added a SourcePath/module-folder overlap guard to
@@ -193,7 +242,8 @@ Modified-On  : 27 July 2026
     ─────────────────────────────────────────────────────────────────────────────
     Step 1 → Validate inputs; confirm SourcePath/module-folder don't overlap
     Step 2 → If rebuilding (-Force), read the GUID from the prior .psd1
-    Step 3 → Create the module folder structure; copy .ps1 files into .\Public
+    Step 3 → Create the module folder structure; copy .ps1 files into .\Public,
+             preserving each file's subfolder position relative to -SourcePath
     Step 4 → Parse each file's AST to discover function names
     Step 5 → Generate the .psm1 loader/exporter
     Step 6 → Generate the .psd1 manifest via New-ModuleManifest
@@ -203,9 +253,9 @@ Modified-On  : 27 July 2026
     Known Limitations:
     ─────────────────────────────────────────────────────────────────────────────
     - The generated .psm1 dot-sources and executes every .ps1 file in its Public
-      folder at Import-Module time. Only build modules from source folders you
-      trust - this tool does not scan script contents for malicious code, only
-      for function definitions.
+      folder (recursively) at Import-Module time. Only build modules from source
+      folders you trust - this tool does not scan script contents for malicious
+      code, only for function definitions.
     - Console Output: Uses Write-Verbose for progress narration (visible with
       -Verbose), Write-Progress for the per-file loop, and Write-Warning for
       non-fatal issues (duplicate function names, files with no functions
@@ -375,8 +425,20 @@ Function New-PSModuleFromScripts
                 Write-Progress -Activity 'Building module' -Status "Processing $($file.Name)" -PercentComplete $percentComplete
                 Write-Verbose -Message "[$fileCounter/$($scriptFiles.Count)] Processing $($file.Name)"
 
-                # Copy the script as-is into the module's Public folder
-                Copy-Item -Path $file.FullName -Destination (Join-Path -Path $publicFolder -ChildPath $file.Name) -Force
+                # Copy the script into the module's Public folder, preserving
+                # its position relative to -SourcePath instead of flattening
+                # every file into the root of .\Public. This keeps -Recurse
+                # builds navigable and avoids same-name files from different
+                # source subfolders silently overwriting one another.
+                $relativePath    = $file.FullName.Substring($resolvedSource.Length).TrimStart('\', '/')
+                $destinationPath = Join-Path -Path $publicFolder -ChildPath $relativePath
+                $destinationDir  = Split-Path -Path $destinationPath -Parent
+
+                if (-not (Test-Path -Path $destinationDir)) {
+                    New-Item -Path $destinationDir -ItemType Directory -Force | Out-Null
+                }
+
+                Copy-Item -Path $file.FullName -Destination $destinationPath -Force
 
                 $parseTokens = $null
                 $parseErrors = $null
