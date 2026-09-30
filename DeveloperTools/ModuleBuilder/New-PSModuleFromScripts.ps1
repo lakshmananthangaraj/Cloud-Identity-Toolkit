@@ -99,6 +99,14 @@ Modified-On  : 28 September 2026
     Without this switch, the function refuses to overwrite an existing module folder.
     When rebuilding, the module's original GUID is preserved (see .DESCRIPTION).
 
+.PARAMETER SplitByFolder
+    If specified, builds one module per first-level folder under -SourcePath instead
+    of a single combined module. Each module is named "<ModuleName>.<FolderName>"
+    (folder names are used exactly as they are). Deeper subfolders are preserved
+    under each module's Public folder. Recursion is always on in this mode, so
+    -Recurse is not required. Scripts placed directly in the -SourcePath root are
+    ignored with a warning.
+
 .INPUTS
     None. This function does not accept pipeline input.
 
@@ -159,6 +167,14 @@ Modified-On  : 28 September 2026
     Runs with full narration - shows validation steps, per-file AST parsing
     progress, and a final [SUCCESS]/function-count summary. Useful when
     troubleshooting why a function wasn't discovered or exported.
+
+.EXAMPLE
+    $results = New-PSModuleFromScripts -SourcePath "D:\Cloud-Identity-Toolkit" `
+        -ModuleName "CloudIdentityToolkit" `
+        -OutputPath "D:\PowerShell-Modules" `
+        -SplitByFolder -Force -Verbose
+
+    $results | Select-Object ModuleName, FunctionCount
 
 .EXAMPLE
     $result = New-PSModuleFromScripts -SourcePath ".\MyScripts" -ModuleName "Toolbox" -Force
@@ -278,8 +294,7 @@ Modified-On  : 28 September 2026
 #>
 
 
-Function New-PSModuleFromScripts
-{
+Function New-PSModuleFromScripts {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param
     (
@@ -314,7 +329,10 @@ Function New-PSModuleFromScripts
         [switch]$Recurse,
 
         [Parameter(Mandatory = $false)]
-        [switch]$Force
+        [switch]$Force,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$SplitByFolder
     )
 
     Begin {
@@ -346,6 +364,120 @@ Function New-PSModuleFromScripts
             }
 
             $resolvedSource = (Resolve-Path -Path $SourcePath -ErrorAction Stop).Path.TrimEnd('\', '/')
+
+            if ($SplitByFolder) {
+                Write-Verbose -Message '--- SplitByFolder: discovering first-level folders ---'
+
+                $resolvedOutput = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath).TrimEnd('\', '/')
+
+                $firstLevelFolders = Get-ChildItem -Path $resolvedSource -Directory -ErrorAction Stop |
+                Where-Object { $_.FullName.TrimEnd('\', '/') -ine $resolvedOutput } |
+                Sort-Object -Property Name
+
+                $looseScripts = Get-ChildItem -Path $resolvedSource -Filter '*.ps1' -File -ErrorAction SilentlyContinue
+                if ($looseScripts) {
+                    Write-Warning -Message "SplitByFolder: $(@($looseScripts).Count) .ps1 file(s) sit directly in '$resolvedSource' (not inside a folder) and will be ignored."
+                }
+
+                $splitResults = New-Object -TypeName System.Collections.Generic.List[PSObject]
+
+                foreach ($folder in $firstLevelFolders) {
+                    $subModuleName = "$ModuleName.$($folder.Name)"
+
+                    if ($subModuleName -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') {
+                        Write-Warning -Message "Skipping folder '$($folder.Name)': '$subModuleName' is not a valid module name (letters, digits, dot, dash, underscore only)."
+                        continue
+                    }
+
+                    $hasScripts = Get-ChildItem -Path $folder.FullName -Filter '*.ps1' -File -Recurse -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+                    if (-not $hasScripts) {
+                        Write-Warning -Message "Skipping folder '$($folder.Name)': no .ps1 files found."
+                        continue
+                    }
+
+                    $splitParams = @{
+                        SourcePath    = $folder.FullName
+                        ModuleName    = $subModuleName
+                        OutputPath    = $OutputPath
+                        ModuleVersion = $ModuleVersion
+                        Author        = $Author
+                        Description   = "$Description ($($folder.Name))"
+                        Tags          = $Tags
+                        Recurse       = $true
+                        Force         = $Force.IsPresent
+                    }
+                    if ($ProjectUri) {
+                        $splitParams['ProjectUri'] = $ProjectUri
+                    }
+
+                    try {
+                        Write-Verbose -Message "[SplitByFolder] Building '$subModuleName' from '$($folder.FullName)'"
+                        $splitResult = New-PSModuleFromScripts @splitParams
+                        if ($splitResult) {
+                            $splitResults.Add($splitResult)
+                        }
+                    }
+                    catch {
+                        Write-Warning -Message "Module '$subModuleName' failed and was skipped: $($_.Exception.Message)"
+                    }
+                }
+
+                if ($splitResults.Count -eq 0 -and -not $WhatIfPreference) {
+                    throw "SplitByFolder: no modules were built from '$resolvedSource'."
+                }
+
+                if ($splitResults.Count -gt 0) {
+                    Write-Verbose -Message '--- SplitByFolder: creating root manifest ---'
+
+                    $rootFolder = Join-Path -Path $OutputPath -ChildPath $ModuleName
+                    $rootPsd1Path = Join-Path -Path $rootFolder -ChildPath "$ModuleName.psd1"
+                    $rootGuid = $null
+
+                    if (Test-Path -Path $rootFolder) {
+                        if (-not $Force) {
+                            throw "Root module folder '$rootFolder' already exists. Re-run with -Force to rebuild it."
+                        }
+                        try {
+                            $rootGuid = (Import-PowerShellDataFile -Path $rootPsd1Path -ErrorAction Stop).GUID
+                        }
+                        catch {
+                            Write-Verbose -Message '[INFO] No readable prior root manifest - a new GUID will be generated.'
+                        }
+                        Remove-Item -Path $rootFolder -Recurse -Force
+                    }
+                    if (-not $rootGuid) {
+                        $rootGuid = [guid]::NewGuid().ToString()
+                    }
+
+                    New-Item -Path $rootFolder -ItemType Directory -Force | Out-Null
+
+                    $rootManifestParams = @{
+                        Path              = $rootPsd1Path
+                        ModuleVersion     = $ModuleVersion
+                        Guid              = $rootGuid
+                        Author            = $Author
+                        CompanyName       = $Author
+                        Copyright         = "(c) $(Get-Date -Format 'yyyy') $Author. All rights reserved."
+                        Description       = $Description
+                        PowerShellVersion = '5.1'
+                        RequiredModules   = @($splitResults | ForEach-Object { $_.ModuleName })
+                        FunctionsToExport = @()
+                        CmdletsToExport   = @()
+                        VariablesToExport = @()
+                        AliasesToExport   = @()
+                        Tags              = $Tags
+                    }
+                    if ($ProjectUri) {
+                        $rootManifestParams['ProjectUri'] = $ProjectUri
+                    }
+
+                    New-ModuleManifest @rootManifestParams
+                    Write-Verbose -Message "[SplitByFolder] Root manifest created: $rootPsd1Path"
+                }
+
+                return $splitResults.ToArray()
+            }
 
             $getChildItemParams = @{
                 Path        = $SourcePath
@@ -430,9 +562,9 @@ Function New-PSModuleFromScripts
                 # every file into the root of .\Public. This keeps -Recurse
                 # builds navigable and avoids same-name files from different
                 # source subfolders silently overwriting one another.
-                $relativePath    = $file.FullName.Substring($resolvedSource.Length).TrimStart('\', '/')
+                $relativePath = $file.FullName.Substring($resolvedSource.Length).TrimStart('\', '/')
                 $destinationPath = Join-Path -Path $publicFolder -ChildPath $relativePath
-                $destinationDir  = Split-Path -Path $destinationPath -Parent
+                $destinationDir = Split-Path -Path $destinationPath -Parent
 
                 if (-not (Test-Path -Path $destinationDir)) {
                     New-Item -Path $destinationDir -ItemType Directory -Force | Out-Null
