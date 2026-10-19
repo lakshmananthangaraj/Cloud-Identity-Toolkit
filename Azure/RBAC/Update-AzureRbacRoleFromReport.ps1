@@ -24,6 +24,8 @@ Modified-On  : 19 October 2026
     Authentication: re-uses the existing Az context when present; otherwise prompts via Connect-AzAccount.
     Output: a modern colour console UI (banner, pre-flight checks, per-scope sections, status badges, summary dashboard).
     Files written to -LogPath: a log file, a per-row results CSV and a rollback CSV (original assignments removed).
+    The log file is an exact plain-text mirror of the on-screen output (same layout, same badges, no colours),
+    with a run header (start time, user, machine, options) and a footer (end time).
     Supports -WhatIf (full read-only simulation; log/results files are still written) and -Confirm.
     Use -Force to suppress the per-row confirmation prompts.
 
@@ -97,6 +99,7 @@ Modified-On  : 19 October 2026
     - Conditional (ABAC) role assignments are not recreated with their conditions.
     - Assignable-scope check for the target role is best-effort; the API result is treated as authoritative.
     - Console UI uses colour and box-drawing characters; it is designed for the Windows PowerShell console, Windows Terminal and ISE.
+    - The log mirrors the console output only: confirmation prompts, the progress bar, PowerShell warnings and -Verbose messages are not written to it.
 
 .LINK
     https://learn.microsoft.com/powershell/module/az.resources/new-azroleassignment
@@ -278,7 +281,8 @@ Function Update-AzureRbacRoleFromReport
         Write-Host ('  {0,-7}' -f ("$Index/$Total")) -ForegroundColor DarkGray -NoNewline
         Write-UiBadge -Kind $Kind
         Write-Host $Name -ForegroundColor White -NoNewline
-        Write-Host ("  ($Type)") -ForegroundColor DarkGray
+        Write-Host ("  ($Type)") -ForegroundColor DarkGray -NoNewline
+        Write-Host ('   ' + (Get-Date -Format 'HH:mm:ss')) -ForegroundColor DarkGray
         if ($Detail)
         {
             Write-Host ('          ' + $ch.BL + $ch.H + ' ' + $Detail) -ForegroundColor Gray
@@ -321,6 +325,8 @@ Function Update-AzureRbacRoleFromReport
         throw "Unable to create log folder '$LogPath': $($_.Exception.Message)"
     }
 
+    # The log file is written by the screen mirror below (Write-Host / Write-LogOnly),
+    # so this function only shows the badge line on screen (-Console) and emits -Verbose output.
     function Write-RbacLog
     {
         param (
@@ -329,22 +335,61 @@ Function Update-AzureRbacRoleFromReport
             [switch]$Console
         )
 
-        $line = '{0} [{1,-7}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
-        try
-        {
-            Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 -WhatIf:$false -Confirm:$false -ErrorAction Stop
-        }
-        catch
-        {
-            Write-Warning "Could not write to log file: $($_.Exception.Message)"
-        }
-        Write-Verbose $Message
+        Write-Verbose ('[{0}] {1}' -f $Level, $Message)
 
         if ($Console)
         {
             Write-Host '  ' -NoNewline
             Write-UiBadge -Kind $Level
             Write-Host $Message -ForegroundColor Gray
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # Log mirroring: everything written to the screen is also written to the log
+    # ------------------------------------------------------------------
+    $logState = @{ Text = ''; Warned = $false }
+
+    # Writes a plain line to the log file only (nothing on screen)
+    function Write-LogOnly
+    {
+        param ([string]$Text = '')
+        try
+        {
+            Add-Content -LiteralPath $logFile -Value $Text -Encoding UTF8 -WhatIf:$false -Confirm:$false -ErrorAction Stop
+        }
+        catch
+        {
+            # Logging must never break the run; warn once only
+            if (-not $logState.Warned)
+            {
+                $logState.Warned = $true
+                Write-Warning "Could not write to log file: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    # Shadows the Write-Host cmdlet inside this function only: shows the text on screen
+    # (with colours) and appends the same text, without colours, to the log file.
+    function Write-Host
+    {
+        [CmdletBinding()]
+        param (
+            [Parameter(Position = 0, ValueFromRemainingArguments = $true)][object[]]$Object,
+            [switch]$NoNewline,
+            [object]$Separator = ' ',
+            [System.ConsoleColor]$ForegroundColor,
+            [System.ConsoleColor]$BackgroundColor
+        )
+
+        Microsoft.PowerShell.Utility\Write-Host @PSBoundParameters
+
+        $text = (@($Object) | ForEach-Object { [string]$_ }) -join [string]$Separator
+        $logState.Text += $text
+        if (-not $NoNewline)
+        {
+            Write-LogOnly -Text $logState.Text
+            $logState.Text = ''
         }
     }
 
@@ -471,6 +516,15 @@ Function Update-AzureRbacRoleFromReport
         }
         Write-Host ''
     }
+
+    # ------------------------------------------------------------------
+    # Log run header (log file only)
+    # ------------------------------------------------------------------
+    Write-LogOnly -Text ('Started   : {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+    Write-LogOnly -Text ('Run by    : {0}\{1} on {2}' -f $env:USERDOMAIN, $env:USERNAME, $env:COMPUTERNAME)
+    Write-LogOnly -Text ('CSV       : {0}' -f $CsvPath)
+    Write-LogOnly -Text ('Options   : WhatIf={0} | KeepSourceRole={1} | Force={2}' -f $isSim, $KeepSourceRole.IsPresent, $Force.IsPresent)
+    Write-LogOnly -Text ''
 
     # ------------------------------------------------------------------
     # Banner
@@ -863,6 +917,7 @@ Function Update-AzureRbacRoleFromReport
         }
 
         Write-UiSummary
+        Write-LogOnly -Text ('Ended     : {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
     }
 
     if ($PassThru)
